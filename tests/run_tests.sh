@@ -371,8 +371,29 @@ ok = (o1.count("(A,B);") >= 2 and ("main" in o2) and o2.count("(A,B);") == 1
 sys.exit(0 if ok else 1)
 PY
     then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL te1: PTY line-editor recall/edit/completion"; fi
+
+    # te2: bare invocation at a terminal prints usage and exits (no stdin hang)
+    if python3 - "$BIN" <<'PY'
+import pty, os, select, time, sys
+BIN = sys.argv[1]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execv(BIN, [BIN])            # no args; stdin is a tty
+t0 = time.time(); ex = None
+while time.time() - t0 < 3:
+    w, st = os.waitpid(pid, os.WNOHANG)
+    if w == pid: ex = st; break
+    r, _, _ = select.select([fd], [], [], 0.1)
+    if r:
+        try: os.read(fd, 4096)
+        except OSError: pass
+if ex is None:                       # still running -> it hung reading stdin
+    os.kill(pid, 9); os.waitpid(pid, 0); sys.exit(1)
+sys.exit(0 if os.WEXITSTATUS(ex) == 2 else 1)
+PY
+    then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL te2: bare invocation should print usage and exit"; fi
 else
-    echo "skip te1: python3 not found (PTY line-editor test)"
+    echo "skip te1/te2: python3 not found (PTY tests)"
 fi
 
 echo

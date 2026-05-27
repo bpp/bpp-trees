@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #define BPP_TREE_VERSION "0.1.0"   /* phase 1: binary trees */
 
@@ -292,6 +293,13 @@ int main(int argc, char **argv)
                 return 2;
             }
         } else {
+            /* No input source given. Read piped/redirected stdin, but at an
+             * interactive terminal show usage instead of blocking silently. */
+            if (isatty(STDIN_FILENO)) {
+                usage(stderr);
+                joinlist_free(&joins); diag_free(&errs); diag_free(&warns);
+                return 2;
+            }
             text = read_stream(stdin);
         }
         syntax_errs = parse_joins_text(text, &joins, &errs);
