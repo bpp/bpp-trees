@@ -2,6 +2,8 @@
 #ifndef BPP_TREE_TREE_H
 #define BPP_TREE_TREE_H
 
+#include <stdio.h>
+
 typedef struct TreeNode {
     char            *name;           /* leaf name, or clade label (owned) */
     char            *implicit_label; /* sorted leaf names joined by '_' (owned) */
@@ -54,5 +56,12 @@ int       treenode_count_internal(const TreeNode *node);
 /* Reverse the order of a node's children (a no-op for leaves). Changes the
  * Newick string but not the topology. */
 void      treenode_rotate(TreeNode *node);
+
+/* Print the subtree as an indented, root-at-left branching diagram. Each line
+ * is prefixed with `lead`. Tips show their name; internal nodes show their
+ * explicit label, or their implicit leaf-set label if unlabelled. `ascii`
+ * selects plain ASCII connectors instead of Unicode box-drawing characters. */
+void      treenode_display(const TreeNode *root, FILE *fp, int ascii,
+                           const char *lead);
 
 #endif /* BPP_TREE_TREE_H */

@@ -98,6 +98,55 @@ void treenode_finalize(TreeNode *node)
     if (!node->name) node->name = xstrdup(lbl);
 }
 
+/* Connector glyphs for treenode_display. */
+typedef struct {
+    const char *vbar;   /* ancestor line continues:  "│ " */
+    const char *gap;    /* ancestor line ended:      "  " */
+    const char *mid;    /* this node, more siblings: "├─" */
+    const char *last;   /* this node, last sibling:  "└─" */
+    const char *tee;    /* node has children:        "┬"  */
+    const char *leaf;   /* node is a tip:            "─"  */
+} DisplayGlyphs;
+
+static const char *display_label(const TreeNode *n)
+{
+    if (n->is_leaf) return n->name;
+    return n->explicit_label ? n->explicit_label : n->implicit_label;
+}
+
+static void display_rec(const TreeNode *n, const char *prefix, int is_last,
+                        int is_root, FILE *fp, const DisplayGlyphs *g,
+                        const char *lead)
+{
+    fputs(lead, fp);
+    if (is_root) {
+        fputs(n->is_leaf ? g->leaf : g->tee, fp);
+    } else {
+        fputs(prefix, fp);
+        fputs(is_last ? g->last : g->mid, fp);
+        fputs(n->is_leaf ? g->leaf : g->tee, fp);
+    }
+    fputc(' ', fp);
+    fputs(display_label(n), fp);
+    fputc('\n', fp);
+
+    if (n->is_leaf) return;
+
+    char *cp = is_root ? xstrdup(prefix)
+                       : xasprintf("%s%s", prefix, is_last ? g->gap : g->vbar);
+    for (int i = 0; i < n->n_children; i++)
+        display_rec(n->children[i], cp, i == n->n_children - 1, 0, fp, g, lead);
+    free(cp);
+}
+
+void treenode_display(const TreeNode *root, FILE *fp, int ascii, const char *lead)
+{
+    static const DisplayGlyphs uni = { "│ ", "  ", "├─", "└─", "┬", "─" };
+    static const DisplayGlyphs asc = { "| ", "  ", "|-", "`-", "+", "-" };
+    if (!root) return;
+    display_rec(root, "", 1, 1, fp, ascii ? &asc : &uni, lead ? lead : "");
+}
+
 void treenode_recompute(TreeNode *node)
 {
     if (!node || node->is_leaf) return;

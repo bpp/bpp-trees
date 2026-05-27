@@ -108,11 +108,44 @@ bpp-tree [options] [JOINS_FILE]
 | `--quiet` | Suppress warnings/progress on stderr |
 | `--joins STRING` | Join formula as a `,`- or `;`-separated string |
 | `--imap FILE` | Imap file; fills individual counts automatically |
+| `--display` | Also print the tree as an indented branching diagram |
+| `--ascii` | With `--display`, use ASCII connectors instead of Unicode |
 | `--move LIST` | Prune-and-regraft moves `SRC->DST` (see below) |
 | `--rotate LIST` | Reverse the children of each named clade (see below) |
 | `--out PREFIX` | Write `PREFIX.nwk` and `PREFIX.stree` |
 | `--newick-only` | Print only the Newick string |
 | `--validate` | Validate only; exit 0 if valid, 1 if errors |
+
+### Displaying the tree
+
+`--display` adds an indented, root-at-left branching diagram to the human
+output. Tips show their name; internal nodes show their explicit label, or
+their implicit leaf-set label when unlabelled (so every ancestor is named).
+Unicode box-drawing is used by default; `--ascii` switches to plain ASCII.
+
+```
+$ bpp-tree --display examples/primates.joins
+...
+Tree:
+  ┬ bonobo_chimp_gibbon_gorilla_human_macaque_orang_siamang
+  ├── macaque
+  └─┬ apes
+    ├─┬ hominidae
+    │ ├── orang
+    │ └─┬ homininae
+    │   ├── gorilla
+    │   └─┬ hominini
+    │     ├─┬ pan
+    │     │ ├── chimp
+    │     │ └── bonobo
+    │     └── human
+    └─┬ hylobatidae
+      ├── gibbon
+      └── siamang
+```
+
+The diagram reflects any `--move`/`--rotate` transforms. It is human-output
+only (not included in `--json`).
 
 ### Moving clades (prune-and-regraft)
 

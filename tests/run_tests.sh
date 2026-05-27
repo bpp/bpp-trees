@@ -130,6 +130,18 @@ exit_is tm10 1 --joins 'A+B,A_B+C' --move 'A_B->A'                         # inv
 # move then rotate (moves apply first)
 check tm11 '(((B,A),(D,E)),C);'   $MV --move 'D_E->A_B' --rotate 'A_B'
 
+# --- Tree display --------------------------------------------------------
+DSP='--quiet --display --joins A+B,C+D'
+has td1 '├─┬ A_B'    $DSP                                    # ancestor label (implicit)
+has td2 '│ ├── A'    $DSP                                    # tip under a continuing branch
+has td3 '└─┬ C_D'    $DSP
+has td4 '┬ A_B_C_D'  $DSP                                    # root shows its leaf-set label
+has td5 '|-+ A_B'    --quiet --display --ascii --joins 'A+B,C+D'   # ASCII fallback
+has td6 '`-- D'      --quiet --display --ascii --joins 'A+B,C+D'
+has td7 '┬ clade'    --quiet --display --joins 'A+B=clade,clade+C' # explicit ancestor label
+# display reflects transforms: after the move, a {A,B,D,E} clade exists
+has td8 'A_B_D_E'    --quiet --display --joins 'A+B,C+D_E,A_B+C_D_E' --move 'A_B->D_E'
+
 # --- Validate exit codes -------------------------------------------------
 exit_is t12 0 --validate --joins 'A+B'
 exit_is t13 1 --validate --joins 'A+B,C+D,E+F'   # 3+ roots -> incomplete

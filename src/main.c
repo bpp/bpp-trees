@@ -22,6 +22,8 @@ typedef struct {
     int   quiet;
     int   newick_only;
     int   validate_only;
+    int   display;        /* --display */
+    int   ascii;          /* --ascii */
     char *joins_string;   /* --joins */
     char *imap_path;      /* --imap */
     char *out_prefix;     /* --out */
@@ -188,6 +190,8 @@ static void usage(FILE *fp)
 "      --imap FILE       Imap file; fills individual counts automatically\n"
 "\n"
 "Output:\n"
+"      --display         Also print the tree as an indented branching diagram\n"
+"      --ascii           With --display, use ASCII connectors (no Unicode)\n"
 "      --move LIST       Prune-and-regraft moves 'SRC->DST' (',' or ';'\n"
 "                        separated, applied in order): detach clade SRC and\n"
 "                        regraft it as the sister of DST.\n"
@@ -208,7 +212,8 @@ int main(int argc, char **argv)
     Options o = { .json_indent = 2 };
 
     enum { OPT_VERSION = 1000, OPT_JSON, OPT_INDENT, OPT_JOINS, OPT_IMAP,
-           OPT_OUT, OPT_NEWICK, OPT_VALIDATE, OPT_QUIET, OPT_ROTATE, OPT_MOVE };
+           OPT_OUT, OPT_NEWICK, OPT_VALIDATE, OPT_QUIET, OPT_ROTATE, OPT_MOVE,
+           OPT_DISPLAY, OPT_ASCII };
     static struct option lo[] = {
         {"help",        no_argument,       0, 'h'},
         {"version",     no_argument,       0, OPT_VERSION},
@@ -220,6 +225,8 @@ int main(int argc, char **argv)
         {"out",         required_argument, 0, OPT_OUT},
         {"move",        required_argument, 0, OPT_MOVE},
         {"rotate",      required_argument, 0, OPT_ROTATE},
+        {"display",     no_argument,       0, OPT_DISPLAY},
+        {"ascii",       no_argument,       0, OPT_ASCII},
         {"newick-only", no_argument,       0, OPT_NEWICK},
         {"validate",    no_argument,       0, OPT_VALIDATE},
         {0, 0, 0, 0}
@@ -238,6 +245,8 @@ int main(int argc, char **argv)
             case OPT_OUT:      o.out_prefix = optarg; break;
             case OPT_MOVE:     o.move_spec = optarg; break;
             case OPT_ROTATE:   o.rotate_spec = optarg; break;
+            case OPT_DISPLAY:  o.display = 1; break;
+            case OPT_ASCII:    o.ascii = 1; break;
             case OPT_NEWICK:   o.newick_only = 1; break;
             case OPT_VALIDATE: o.validate_only = 1; break;
             default:           usage(stderr); return 2;
@@ -356,12 +365,23 @@ int main(int argc, char **argv)
             } else {
                 printf("bpp-tree: %d taxa, %d joins, valid\n\n", n_taxa, n_joins);
                 printf("Newick:\n  %s\n\n", newick);
+                if (o.display) {
+                    printf("Tree:\n");
+                    treenode_display(r->root, stdout, o.ascii, "  ");
+                    printf("\n");
+                }
                 printf("BPP species&tree block:\n");
                 /* indent the block by 2 spaces on its first line for display */
                 printf("  %s\n", block);
                 if (!filled)
                     printf("\nNote: replace '?' with the number of sequences per "
                            "species from your Imap file.\n");
+            }
+
+            /* --display alongside --newick-only / --validate: append the diagram */
+            if (o.display && (o.newick_only || o.validate_only)) {
+                printf("Tree:\n");
+                treenode_display(r->root, stdout, o.ascii, "  ");
             }
 
             if (o.out_prefix && !o.validate_only) {
