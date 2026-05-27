@@ -243,6 +243,7 @@ typo or tweaking a `move`/`graft`. **Tab** completion is context-aware:
 command names and clade/tip/Imap-species names at the start of a line (and as
 `move`/`graft`/… arguments); **file paths** after `imap` and `block`; and tree
 names after `use`/`drop`/`save`. A second ambiguous Tab lists the candidates.
+Paths may be relative, absolute, or start with `~/` (expanded to `$HOME`).
 `history` lists the commands you've entered.
 
 ```

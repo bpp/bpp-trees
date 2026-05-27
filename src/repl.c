@@ -219,6 +219,16 @@ static void cmd_newick(const NamedTree *t)
     diag_free(&errs); diag_free(&warns);
 }
 
+/* Expand a leading '~' (or '~/') to $HOME; otherwise copy the path. */
+static char *expand_tilde(const char *path)
+{
+    if (path[0] == '~' && (path[1] == '/' || path[1] == '\0')) {
+        const char *home = getenv("HOME");
+        if (home) return xasprintf("%s%s", home, path + 1);
+    }
+    return xstrdup(path);
+}
+
 static char *read_file_all(const char *path)
 {
     FILE *f = fopen(path, "r");
@@ -280,11 +290,12 @@ static void cmd_block(const NamedTree *t, const char *arg)
         }
     } else if (strncmp(arg, "replace", 7) == 0 &&
                (arg[7] == ' ' || arg[7] == '\t' || arg[7] == '\0')) {
-        const char *file = arg + 7;                     /* replace in a control file */
-        while (*file == ' ' || *file == '\t') file++;
-        if (!*file) {
+        const char *farg = arg + 7;                     /* replace in a control file */
+        while (*farg == ' ' || *farg == '\t') farg++;
+        if (!*farg) {
             printf("usage: block replace FILE\n");
         } else {
+            char *file = expand_tilde(farg);
             char *txt = read_file_all(file);
             if (!txt) {
                 printf("cannot read '%s'\n", file);
@@ -305,12 +316,15 @@ static void cmd_block(const NamedTree *t, const char *arg)
                 }
                 free(txt);
             }
+            free(file);
         }
     } else {                                            /* write block to a file */
-        FILE *fo = fopen(arg, "w");
-        if (!fo) printf("cannot write '%s'\n", arg);
+        char *file = expand_tilde(arg);
+        FILE *fo = fopen(file, "w");
+        if (!fo) printf("cannot write '%s'\n", file);
         else { fprintf(fo, "%s\n", block); fclose(fo);
-               printf("wrote species&tree block to '%s'\n", arg); }
+               printf("wrote species&tree block to '%s'\n", file); }
+        free(file);
     }
 
     free(taxa); free(nwk); free(block); free(counts); imap_free(m);
@@ -459,10 +473,11 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
             return;
         }
         DiagList ie; diag_init(&ie);
-        Imap *m = imap_read(arg, &ie);          /* validate it opens/parses */
-        if (!m) { print_diags(&ie, "error"); diag_free(&ie); return; }
-        free(t->imap_path); t->imap_path = xstrdup(arg);
-        printf("imap attached to '%s': %s (%d species)\n", t->name, arg, m->count);
+        char *full = expand_tilde(arg);
+        Imap *m = imap_read(full, &ie);         /* validate it opens/parses */
+        if (!m) { print_diags(&ie, "error"); free(full); diag_free(&ie); return; }
+        free(t->imap_path); t->imap_path = full;   /* store the expanded path */
+        printf("imap attached to '%s': %s (%d species)\n", t->name, full, m->count);
         imap_free(m); diag_free(&ie);
         return;
     }
@@ -637,29 +652,30 @@ static void add_path_candidates(const char *word, char ***arr, int *n, int *cap)
     const char *slash = strrchr(word, '/');
     char *dirpart = slash ? xstrndup(word, (size_t)(slash - word) + 1) : xstrdup("");
     const char *base = slash ? slash + 1 : word;
-    char *dir = slash ? xstrndup(word, (size_t)(slash - word) + 1) : xstrdup(".");
+    char *fsdir = expand_tilde(dirpart);     /* '~' expanded for the filesystem */
 
-    DIR *d = opendir(dir);
+    DIR *d = opendir(*fsdir ? fsdir : ".");
     if (d) {
         size_t blen = strlen(base);
         struct dirent *e;
         while ((e = readdir(d))) {
             if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
             if (strncmp(e->d_name, base, blen) != 0) continue;
-            char *full = xasprintf("%s%s", dirpart, e->d_name);
+            char *cand = xasprintf("%s%s", dirpart, e->d_name);   /* keeps '~' */
+            char *real = xasprintf("%s%s", fsdir, e->d_name);
             struct stat st;
-            if (stat(full, &st) == 0 && S_ISDIR(st.st_mode)) {
-                char *cd = xasprintf("%s/", full);
+            if (stat(real, &st) == 0 && S_ISDIR(st.st_mode)) {
+                char *cd = xasprintf("%s/", cand);
                 add_cand(arr, n, cap, cd);
                 free(cd);
             } else {
-                add_cand(arr, n, cap, full);
+                add_cand(arr, n, cap, cand);
             }
-            free(full);
+            free(cand); free(real);
         }
         closedir(d);
     }
-    free(dirpart); free(dir);
+    free(dirpart); free(fsdir);
 }
 
 static int repl_complete(const char *buf, int wstart, int wend, char ***out, void *ctx)

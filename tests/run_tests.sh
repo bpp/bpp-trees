@@ -356,12 +356,18 @@ o4 = session([b"A+B"+CR, b"C+D"+CR, b"prune C_"+TAB, CR, b"newick"+CR, b"quit"+C
 # Tab completes an imap species not yet in the tree: 'EU' -> 'EUR'
 o5 = session([("imap %s" % IMAP).encode()+CR, b"EU"+TAB, b"+AFR"+CR, b"newick"+CR, b"quit"+CR])
 # Tab completes a file path for 'imap': '<dir>/sam' -> '<dir>/samples.imap'
-import os.path
+import os.path, tempfile, shutil
 pfx = (os.path.dirname(IMAP) + "/sam").encode()
 o6 = session([b"A+B"+CR, b"imap "+pfx+TAB+CR, b"taxa"+CR, b"quit"+CR])
+# Tab completes a '~/...' path (HOME pointed at a temp dir with a known file)
+hd = tempfile.mkdtemp()
+with open(os.path.join(hd, "zz_taxa.imap"), "w") as f: f.write("s1\tA\ns2\tB\n")
+os.environ["HOME"] = hd
+o7 = session([b"A+B"+CR, b"imap ~/zz"+TAB+CR, b"taxa"+CR, b"quit"+CR])
+shutil.rmtree(hd, ignore_errors=True)
 ok = (o1.count("(A,B);") >= 2 and ("main" in o2) and o2.count("(A,B);") == 1
       and "┬" in o3 and "(A,B);" in o4 and "(EUR,AFR);" in o5
-      and "imap species" in o6)
+      and "imap species" in o6 and "imap species" in o7)
 sys.exit(0 if ok else 1)
 PY
     then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL te1: PTY line-editor recall/edit/completion"; fi
