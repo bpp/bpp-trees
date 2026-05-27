@@ -210,6 +210,10 @@ tree is *active*; anything you type that isn't a command is read as a join and
 added to it, and `move`/`rotate` edit it — all changes are kept in memory.
 `bpp-tree -i FILE` (or `-i --joins '...'`) seeds the first tree.
 
+At a terminal you can recall previous commands with the **up/down arrows** and
+edit them inline (←/→, Home/End, backspace) before running — handy for fixing a
+typo or tweaking a `move`/`graft`. `history` lists the commands you've entered.
+
 ```
 $ bpp-tree -i
 bpp-tree interactive mode. Type 'help' for commands, 'quit' to exit.
@@ -240,6 +244,7 @@ bpp-tree> quit
 | `use NAME` | make `NAME` the active tree |
 | `new NAME` | start a new empty tree and make it active |
 | `drop NAME` | delete a tree |
+| `history` | list the commands entered this session |
 | `help` / `quit` | help; leave (also `exit`, or EOF) |
 
 Each tree is stored as its joins plus an ordered list of moves/rotations and

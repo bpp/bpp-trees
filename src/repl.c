@@ -7,6 +7,7 @@
 #include "validate.h"
 #include "diag.h"
 #include "util.h"
+#include "lineedit.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -236,6 +237,7 @@ static void print_help(void)
 "  display [ascii]    show the active tree as a branching diagram\n"
 "  newick             print the active tree's Newick string\n"
 "  status             taxa count, completeness, and any guidance\n"
+"  history            list the commands entered this session\n"
 "  trees              list trees in memory (active marked '*')\n"
 "  save NAME          save a copy of the active tree as NAME\n"
 "  use NAME           make NAME the active tree\n"
@@ -269,7 +271,7 @@ static int is_blocking_code(const char *code)
         || strcmp(code, DIAG_CYCLE) == 0;
 }
 
-static void handle_line(Workspace *ws, char *raw, int *quit)
+static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
 {
     char *s = trim(raw);
     if (*s == '\0' || *s == '#') return;
@@ -285,6 +287,10 @@ static void handle_line(Workspace *ws, char *raw, int *quit)
     if (IS("quit") || IS("exit") || IS("q")) { *quit = 1; return; }
     if (IS("help") || IS("h") || IS("?"))    { print_help(); return; }
     if (IS("trees") || IS("list") || IS("ls")) { cmd_list(ws); return; }
+    if (IS("history") || IS("hist")) {
+        for (int i = 0; i < hist->n; i++) printf("  %d  %s\n", i + 1, hist->items[i]);
+        return;
+    }
     if (IS("status") || IS("st"))            { show_status(ws_active(ws)); return; }
     if (IS("newick") || IS("nwk"))           { cmd_newick(ws_active(ws)); return; }
     if (IS("display") || IS("show") || IS("d")) {
@@ -408,21 +414,26 @@ int repl_run(const char *seed_joins)
 
     int tty = isatty(STDIN_FILENO);
     if (tty)
-        fputs("bpp-tree interactive mode. Type 'help' for commands, 'quit' to exit.\n",
+        fputs("bpp-tree interactive mode. Type 'help' for commands, 'quit' to exit.\n"
+              "Use the up/down arrows to recall and edit previous commands.\n",
               stdout);
     if (seed_joins && *seed_joins) show_status(ws_active(&ws));
 
-    char *line = NULL;
-    size_t cap = 0;
+    History hist = {0};
     int quit = 0;
-    while (!quit) {
-        if (tty) { fputs("bpp-tree> ", stdout); fflush(stdout); }
-        if (getline(&line, &cap, stdin) < 0) break;   /* EOF */
-        handle_line(&ws, line, &quit);
+    char *line;
+    while (!quit && (line = line_edit("bpp-tree> ", &hist)) != NULL) {
+        char *s = line;
+        while (*s == ' ' || *s == '\t') s++;
+        if (*s != '\0' && *s != '#') {
+            hist_push(&hist, s);
+            handle_line(&ws, &hist, s, &quit);
+        }
+        free(line);
     }
-    free(line);
     if (tty) fputc('\n', stdout);
 
+    hist_free(&hist);
     for (int i = 0; i < ws.n; i++) tree_free(&ws.trees[i]);
     free(ws.trees);
     return 0;

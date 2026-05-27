@@ -260,6 +260,43 @@ s6="$(printf 'A+B\nprint\nfoo bar\nnewick\nquit\n' | "$BIN" -i 2>&1)"
 chk_contains ti12 "$s6" 'unknown command'
 chk_contains ti13 "$s6" '(A,B);'             # tree unchanged by junk input
 
+# --- Interactive line editor (PTY; requires python3) ---------------------
+if command -v python3 >/dev/null 2>&1; then
+    if python3 - "$BIN" <<'PY'
+import pty, os, select, time, sys
+BIN = sys.argv[1]
+def session(keys):
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execv(BIN, [BIN, "-i"])
+    out = b""
+    for k in keys:
+        os.write(fd, k); time.sleep(0.05)
+    end = time.time() + 1.5
+    while time.time() < end:
+        r, _, _ = select.select([fd], [], [], 0.2)
+        if not r: break
+        try: d = os.read(fd, 4096)
+        except OSError: break
+        if not d: break
+        out += d
+    try: os.close(fd)
+    except OSError: pass
+    os.waitpid(pid, 0)
+    return out.decode(errors="replace")
+UP, CR, BS = b"\x1b[A", b"\r", b"\x7f"
+# Up recalls the previous command and re-runs it
+o1 = session([b"A+B"+CR, b"newick"+CR, UP, CR, b"quit"+CR])
+# recall 'newick', edit it (delete, retype 'trees') -> runs 'trees', not newick
+o2 = session([b"A+B"+CR, b"newick"+CR, UP, BS*6, b"trees"+CR, b"quit"+CR])
+ok = o1.count("(A,B);") >= 2 and ("main" in o2) and o2.count("(A,B);") == 1
+sys.exit(0 if ok else 1)
+PY
+    then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL te1: PTY line-editor recall/edit"; fi
+else
+    echo "skip te1: python3 not found (PTY line-editor test)"
+fi
+
 echo
 echo "passed: $pass   failed: $fail"
 [[ "$fail" == 0 ]]
