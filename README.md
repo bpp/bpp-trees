@@ -258,6 +258,8 @@ bpp-tree> quit
 | `rotate LIST` | reverse children of the named clade(s) |
 | `undo` | undo the last change to the active tree |
 | `display [ascii]` / `newick` / `status` | view the active tree |
+| `imap FILE` | attach an Imap to the active tree (no arg: show; `clear`: detach) |
+| `block` | print the BPP `species&tree` block (counts from the imap) |
 | `trees` | list trees in memory (active marked `*`) |
 | `save NAME` | save a copy of the active tree as `NAME` |
 | `use NAME` | make `NAME` the active tree |
@@ -268,7 +270,17 @@ bpp-tree> quit
 
 Each tree is stored as its joins plus an ordered list of moves/rotations and
 recomputed on demand, so the declarative join set stays order-free while edits
-remain an explicit, ordered layer.
+remain an explicit, ordered layer. `imap FILE` attaches an Imap to the active
+tree so that `block` fills in the per-species counts:
+
+```
+bpp-tree> imap samples.imap
+imap attached to 'main': samples.imap (4 species)
+bpp-tree> block
+species&tree = 4  AFR  EUR  EAS  AMR
+   2  2  2  2
+  (AFR,(EUR,(EAS,AMR)));
+```
 
 ## Validation
 

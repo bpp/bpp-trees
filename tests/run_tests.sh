@@ -275,6 +275,18 @@ s7="$(printf 'A+B\nC+D\nremove A\nnewick\nprune ZZ\nnewick\nquit\n' | "$BIN" -i 
 chk_contains ti14 "$s7" '(B,(C,D));'         # tip removed, parent suppressed
 chk_contains ti15 "$s7" 'PRUNE_UNKNOWN'      # bad target reported, not applied
 
+# attach an imap and print the species&tree block with filled counts
+s8="$(printf 'EAS+AMR=ea\nEUR+ea=eu\nAFR+eu\nimap %s\nblock\nquit\n' "$FIX/samples.imap" | "$BIN" -i 2>&1)"
+chk_contains ti16 "$s8" 'imap attached'
+chk_contains ti17 "$s8" 'species&tree = 4  AFR  EUR  EAS  AMR'
+chk_contains ti18 "$s8" '2  2  2  2'
+# block without an imap uses '?' placeholders
+s9="$(printf 'A+B\nC+D\nblock\nquit\n' | "$BIN" -i 2>&1)"
+chk_contains ti19 "$s9" '?  ?  ?  ?'
+# attaching a missing imap is an error (not attached)
+s10="$(printf 'A+B\nimap /no/such/file.imap\nquit\n' | "$BIN" -i 2>&1)"
+chk_contains ti20 "$s10" 'cannot open'
+
 # --- Interactive line editor (PTY; requires python3) ---------------------
 if command -v python3 >/dev/null 2>&1; then
     if python3 - "$BIN" <<'PY'

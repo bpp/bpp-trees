@@ -7,6 +7,8 @@
 #include "validate.h"
 #include "diag.h"
 #include "util.h"
+#include "imap.h"
+#include "block.h"
 #include "lineedit.h"
 
 #include <ctype.h>
@@ -26,6 +28,7 @@ typedef struct {
     char *name;
     Op   *ops;
     int   n_ops, cap;
+    char *imap_path;     /* attached Imap file, or NULL */
 } NamedTree;
 
 typedef struct {
@@ -41,6 +44,7 @@ static void tree_init(NamedTree *t, const char *name)
     t->name = xstrdup(name);
     t->ops = NULL;
     t->n_ops = t->cap = 0;
+    t->imap_path = NULL;
 }
 
 static void tree_add_op(NamedTree *t, OpKind kind, const char *spec)
@@ -59,6 +63,7 @@ static void tree_free(NamedTree *t)
     for (int i = 0; i < t->n_ops; i++) free(t->ops[i].spec);
     free(t->ops);
     free(t->name);
+    free(t->imap_path);
 }
 
 static void tree_copy(NamedTree *dst, const NamedTree *src, const char *name)
@@ -66,6 +71,7 @@ static void tree_copy(NamedTree *dst, const NamedTree *src, const char *name)
     tree_init(dst, name);
     for (int i = 0; i < src->n_ops; i++)
         tree_add_op(dst, src->ops[i].kind, src->ops[i].spec);
+    if (src->imap_path) dst->imap_path = xstrdup(src->imap_path);
 }
 
 /* Build the resolved tree from the op list: accumulate all joins, resolve,
@@ -211,6 +217,47 @@ static void cmd_newick(const NamedTree *t)
     diag_free(&errs); diag_free(&warns);
 }
 
+static void cmd_block(const NamedTree *t)
+{
+    if (t->n_ops == 0) { printf("(empty tree — add joins first)\n"); return; }
+    DiagList errs, warns; JoinList joins;
+    diag_init(&errs); diag_init(&warns);
+    Resolution *r = tree_build(t, &joins, &errs, &warns);
+    if (!r->root) {
+        print_diags(&errs, "error");
+        printf("(tree is incomplete — no block yet)\n");
+        resolution_free(r); joinlist_free(&joins); diag_free(&errs); diag_free(&warns);
+        return;
+    }
+    TreeNode **taxa = NULL; int nt = 0, tc = 0;
+    treenode_collect_leaves(r->root, &taxa, &nt, &tc);
+    char *body = treenode_to_newick(r->root);
+    char *nwk = xasprintf("%s;", body);
+    free(body);
+
+    Imap *m = NULL;
+    if (t->imap_path) {
+        DiagList ie; diag_init(&ie);
+        m = imap_read(t->imap_path, &ie);
+        if (!m) print_diags(&ie, "error");
+        diag_free(&ie);
+    }
+    int filled = 0, *counts = NULL;
+    char *block = species_block(taxa, nt, nwk, m, &filled, &counts);
+    printf("%s\n", block);
+    if (!filled) {
+        if (!t->imap_path)
+            printf("(counts are '?'; attach an Imap with 'imap FILE')\n");
+        else {
+            printf("(no count for:");
+            for (int i = 0; i < nt; i++) if (counts[i] < 0) printf(" %s", taxa[i]->name);
+            printf(")\n");
+        }
+    }
+    free(taxa); free(nwk); free(block); free(counts); imap_free(m);
+    resolution_free(r); joinlist_free(&joins); diag_free(&errs); diag_free(&warns);
+}
+
 static void cmd_list(const Workspace *ws)
 {
     for (int i = 0; i < ws->n; i++) {
@@ -239,6 +286,8 @@ static void print_help(void)
 "  undo               undo the last change to the active tree\n"
 "  display [ascii]    show the active tree as a branching diagram\n"
 "  newick             print the active tree's Newick string\n"
+"  block              print the BPP species&tree block (counts from the imap)\n"
+"  imap [FILE]        attach an Imap file (no arg: show; 'clear': detach)\n"
 "  status             taxa count, completeness, and any guidance\n"
 "  history            list the commands entered this session\n"
 "  trees              list trees in memory (active marked '*')\n"
@@ -296,6 +345,27 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
     }
     if (IS("status") || IS("st"))            { show_status(ws_active(ws)); return; }
     if (IS("newick") || IS("nwk"))           { cmd_newick(ws_active(ws)); return; }
+    if (IS("block"))                         { cmd_block(ws_active(ws)); return; }
+    if (IS("imap")) {
+        NamedTree *t = ws_active(ws);
+        if (!*arg) {
+            if (t->imap_path) printf("imap: %s\n", t->imap_path);
+            else              printf("no imap attached (use 'imap FILE')\n");
+            return;
+        }
+        if (strcmp(arg, "clear") == 0 || strcmp(arg, "none") == 0) {
+            free(t->imap_path); t->imap_path = NULL;
+            printf("imap detached\n");
+            return;
+        }
+        DiagList ie; diag_init(&ie);
+        Imap *m = imap_read(arg, &ie);          /* validate it opens/parses */
+        if (!m) { print_diags(&ie, "error"); diag_free(&ie); return; }
+        free(t->imap_path); t->imap_path = xstrdup(arg);
+        printf("imap attached to '%s': %s (%d species)\n", t->name, arg, m->count);
+        imap_free(m); diag_free(&ie);
+        return;
+    }
     if (IS("display") || IS("show") || IS("d")) {
         cmd_display(ws_active(ws), strcmp(arg, "ascii") == 0);
         return;
@@ -412,8 +482,9 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
 /* --- tab completion ----------------------------------------------------- */
 
 static const char *const COMMANDS[] = {
-    "help", "quit", "exit", "display", "newick", "status", "trees", "history",
-    "save", "use", "new", "drop", "move", "graft", "prune", "remove", "rotate",
+    "help", "quit", "exit", "display", "newick", "block", "imap", "status",
+    "trees", "history", "save", "use", "new", "drop", "move", "graft", "prune",
+    "remove", "rotate",
     NULL
 };
 

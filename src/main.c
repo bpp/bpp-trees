@@ -8,6 +8,7 @@
 #include "diag.h"
 #include "util.h"
 #include "json_writer.h"
+#include "block.h"
 #include "repl.h"
 
 #include <getopt.h>
@@ -68,40 +69,6 @@ static char *newick_string(const TreeNode *root)
     char *s = xasprintf("%s;", body);
     free(body);
     return s;
-}
-
-/* Build the BPP species&tree block. Sets *filled to 1 if all counts came
- * from the Imap, and returns the per-taxon counts via *counts_out (caller
- * frees). taxa[] are in Newick left-to-right order. */
-static char *species_block(TreeNode **taxa, int n_taxa, const char *newick,
-                           const Imap *imap, int *filled, int **counts_out)
-{
-    int *counts = xmalloc((size_t)(n_taxa ? n_taxa : 1) * sizeof(int));
-    int all = (imap != NULL);
-    for (int i = 0; i < n_taxa; i++) {
-        counts[i] = imap ? imap_count_for(imap, taxa[i]->name) : -1;
-        if (counts[i] < 0) all = 0;
-    }
-    *filled = all;
-
-    /* line 1: "species&tree = N  n1  n2 ..." */
-    char *out = xasprintf("species&tree = %d", n_taxa);
-    for (int i = 0; i < n_taxa; i++) {
-        char *tmp = xasprintf("%s  %s", out, taxa[i]->name);
-        free(out); out = tmp;
-    }
-    /* line 2: counts */
-    { char *tmp = xasprintf("%s\n ", out); free(out); out = tmp; }
-    for (int i = 0; i < n_taxa; i++) {
-        char *tmp = (counts[i] >= 0) ? xasprintf("%s  %d", out, counts[i])
-                                     : xasprintf("%s  ?", out);
-        free(out); out = tmp;
-    }
-    /* line 3: newick */
-    { char *tmp = xasprintf("%s\n  %s", out, newick); free(out); out = tmp; }
-
-    *counts_out = counts;
-    return out;
 }
 
 static void print_diag(FILE *fp, const Diagnostic *d, const char *kind)
