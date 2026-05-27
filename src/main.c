@@ -239,6 +239,25 @@ int main(int argc, char **argv)
     }
     if (optind < argc) o.joins_file = argv[optind];
 
+    /* Catch the common mistake of an unquoted --joins string: the shell
+     * splits 'A+B, A_B+C' into a --joins value plus stray arguments. */
+    if (o.joins_string && o.joins_file) {
+        fprintf(stderr,
+            "bpp-tree: both --joins and a separate argument ('%s') were given; "
+            "only one input is allowed.\n", o.joins_file);
+        fprintf(stderr,
+            "  hint: quote the --joins string so spaces don't split it, e.g.\n"
+            "          --joins 'A+B, A_B+C'   (or remove the spaces: A+B,A_B+C)\n");
+        return 2;
+    }
+    if (!o.joins_string && argc - optind > 1) {
+        fprintf(stderr,
+            "bpp-tree: too many arguments; expected a single JOINS_FILE.\n"
+            "  hint: to give joins on the command line, use a quoted --joins "
+            "string, e.g.  --joins 'A+B,C+D'\n");
+        return 2;
+    }
+
     /* --- gather input ------------------------------------------------- */
     DiagList errs, warns;
     diag_init(&errs);

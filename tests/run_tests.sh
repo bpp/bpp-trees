@@ -65,6 +65,13 @@ check t8  '(macaque,((orang,(gorilla,((chimp,bonobo),human))),(gibbon,siamang)))
 # t9: --joins string equals file form
 check t9  '((A,B),(C,D));'   --newick-only --joins 'A+B=AB,C+D=CD,AB+CD'
 
+# t9b: an unquoted --joins string that the shell split is caught, not silently
+#      truncated (--joins value plus a stray positional argument)
+exit_is t9b 2 --joins 'A+B,' 'A_B+C'
+has   t9c 'only one input'    --joins 'A+B,' 'A_B+C'
+# t9d: too many positional arguments
+exit_is t9d 2 'A+B' 'C+D'
+
 # t11: comments and blank lines ignored
 check t11 '(A,B);'           --newick-only <<< $'# a comment\n\nA+B   # trailing\n'
 
