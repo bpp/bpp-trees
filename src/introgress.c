@@ -1,0 +1,321 @@
+#include "introgress.h"
+#include "tree.h"
+#include "util.h"
+
+#include <stdlib.h>
+#include <string.h>
+
+void introlist_init(IntroList *g) { g->items = NULL; g->count = g->cap = 0; }
+
+void introlist_free(IntroList *g)
+{
+    for (int i = 0; i < g->count; i++) {
+        free(g->items[i].donor);
+        free(g->items[i].recip);
+        free(g->items[i].label);
+    }
+    free(g->items);
+    introlist_init(g);
+}
+
+static IntroEvent *introlist_grow(IntroList *g)
+{
+    if (g->count == g->cap) {
+        g->cap = g->cap ? g->cap * 2 : 4;
+        g->items = xrealloc(g->items, (size_t)g->cap * sizeof(IntroEvent));
+    }
+    IntroEvent *e = &g->items[g->count++];
+    memset(e, 0, sizeof(*e));
+    e->phi = 0.5; e->phi2 = -1.0; e->src = TAU_BRANCH; e->dst = TAU_BRANCH;
+    return e;
+}
+
+void introlist_copy(IntroList *dst, const IntroList *src)
+{
+    introlist_init(dst);
+    for (int i = 0; i < src->count; i++) {
+        IntroEvent *e = introlist_grow(dst);
+        const IntroEvent *s = &src->items[i];
+        e->donor = xstrdup(s->donor);
+        e->recip = xstrdup(s->recip);
+        e->phi = s->phi; e->phi2 = s->phi2; e->bidir = s->bidir;
+        e->src = s->src; e->dst = s->dst;
+        e->label = s->label ? xstrdup(s->label) : NULL;
+    }
+}
+
+int introlist_find_pair(const IntroList *g, const char *a, const char *b)
+{
+    for (int i = 0; i < g->count; i++) {
+        const char *x = g->items[i].donor, *y = g->items[i].recip;
+        if ((strcmp(x, a) == 0 && strcmp(y, b) == 0) ||
+            (strcmp(x, b) == 0 && strcmp(y, a) == 0)) return i;
+    }
+    return -1;
+}
+
+/* --- parsing ----------------------------------------------------------- */
+
+static char *trim(char *s)
+{
+    while (*s == ' ' || *s == '\t') s++;
+    char *e = s + strlen(s);
+    while (e > s && (e[-1] == ' ' || e[-1] == '\t')) *--e = '\0';
+    return s;
+}
+
+static int parse_tau(const char *v, TauEnd *out)
+{
+    if (strcmp(v, "branch") == 0 || strcmp(v, "yes") == 0) { *out = TAU_BRANCH; return 1; }
+    if (strcmp(v, "node")   == 0 || strcmp(v, "no")  == 0) { *out = TAU_NODE;   return 1; }
+    return 0;
+}
+
+void introlist_parse(IntroList *g, const char *spec, DiagList *errs)
+{
+    const char *p = spec;
+    while (*p) {
+        size_t len = strcspn(p, ",;");
+        char *piece = xstrndup(p, len);
+        p += len; if (*p) p++;
+
+        int bidir = 0;
+        char *arrow = strstr(piece, "<->");
+        size_t alen = 3;
+        if (arrow) bidir = 1;
+        else { arrow = strstr(piece, "->"); alen = 2; }
+        if (!arrow) {
+            diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
+                "introgression '%s' is not of the form DONOR->RECIP (or DONOR<->RECIP).",
+                trim(piece));
+            free(piece); continue;
+        }
+        *arrow = '\0';
+        char *donor = trim(piece);
+        char *rest  = arrow + alen;
+        while (*rest == ' ' || *rest == '\t') rest++;
+        size_t rlen = strcspn(rest, " \t");
+        char *recip = xstrndup(rest, rlen);
+        char *opts  = rest + rlen;
+
+        if (*donor == '\0' || *recip == '\0') {
+            diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
+                "introgression: missing donor or recipient.");
+            free(recip); free(piece); continue;
+        }
+
+        IntroEvent ev; memset(&ev, 0, sizeof ev);
+        ev.donor = xstrdup(donor); ev.recip = xstrdup(recip);
+        ev.phi = 0.5; ev.phi2 = -1.0; ev.src = TAU_BRANCH; ev.dst = TAU_BRANCH;
+        ev.bidir = bidir;
+
+        int bad = 0;
+        char *o = opts;
+        while (*o && !bad) {
+            while (*o == ' ' || *o == '\t') o++;
+            if (!*o) break;
+            size_t tlen = strcspn(o, " \t");
+            char *tok = xstrndup(o, tlen);
+            o += tlen;
+            char *eq = strchr(tok, '=');
+            if (!eq) {
+                diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
+                    "introgression: option '%s' is not key=value.", tok);
+                bad = 1;
+            } else {
+                *eq = '\0'; char *key = tok, *val = eq + 1;
+                if (strcmp(key, "phi") == 0)        ev.phi = atof(val);
+                else if (strcmp(key, "phi2") == 0)  ev.phi2 = atof(val);
+                else if (strcmp(key, "label") == 0) { free(ev.label); ev.label = xstrdup(val); }
+                else if (strcmp(key, "src") == 0) {
+                    if (!parse_tau(val, &ev.src)) {
+                        diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
+                            "introgression: src must be 'branch' or 'node', got '%s'.", val);
+                        bad = 1;
+                    }
+                } else if (strcmp(key, "dst") == 0) {
+                    if (!parse_tau(val, &ev.dst)) {
+                        diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
+                            "introgression: dst must be 'branch' or 'node', got '%s'.", val);
+                        bad = 1;
+                    }
+                } else {
+                    diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
+                        "introgression: unknown option '%s'.", key);
+                    bad = 1;
+                }
+            }
+            free(tok);
+        }
+
+        if (!bad && introlist_find_pair(g, ev.donor, ev.recip) >= 0) {
+            diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
+                "introgression: more than one event between '%s' and '%s'.",
+                ev.donor, ev.recip);
+            bad = 1;
+        }
+        if (bad) {
+            free(ev.donor); free(ev.recip); free(ev.label);
+        } else {
+            IntroEvent *slot = introlist_grow(g);
+            *slot = ev;
+        }
+        free(recip); free(piece);
+    }
+}
+
+/* --- validation -------------------------------------------------------- */
+
+static int is_anc(const TreeNode *a, const TreeNode *b)
+{
+    for (const TreeNode *q = b; q; q = q->parent) if (q == a) return 1;
+    return 0;
+}
+
+static int name_taken(const Resolution *r, const IntroList *g, int upto, const char *name)
+{
+    if (resolution_find(r, name)) return 1;
+    for (int i = 0; i < upto; i++)
+        if (g->items[i].label && strcmp(g->items[i].label, name) == 0) return 1;
+    return 0;
+}
+
+int introlist_apply(IntroList *g, Resolution *r, DiagList *errs)
+{
+    int ok = 1, autonum = 0;
+    for (int k = 0; k < g->count; k++) {
+        IntroEvent *e = &g->items[k];
+        TreeNode *D = resolution_find(r, e->donor);
+        TreeNode *R = resolution_find(r, e->recip);
+        if (!D || !R) {
+            diag_add(errs, DIAG_INTROGRESSION_UNKNOWN, -1,
+                "introgression: %s '%s' is not in the tree.",
+                D ? "recipient" : "donor", D ? e->recip : e->donor);
+            ok = 0; continue;
+        }
+        if (D == R) {
+            diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
+                "introgression: donor and recipient are the same ('%s').", e->donor);
+            ok = 0; continue;
+        }
+        if (is_anc(D, R) || is_anc(R, D)) {
+            Diagnostic *d = diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
+                "introgression: '%s' and '%s' are ancestor and descendant; they do "
+                "not coexist in time.", e->donor, e->recip);
+            diag_set_hint(d, "an introgression must connect two non-nested "
+                             "(contemporaneous) branches.");
+            ok = 0; continue;
+        }
+        if (e->phi <= 0.0 || e->phi >= 1.0) {
+            diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
+                "introgression: phi=%g is out of range (0 < phi < 1).", e->phi);
+            ok = 0; continue;
+        }
+        if (e->bidir) {
+            diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
+                "introgression: bidirectional (model D) is not yet implemented.");
+            ok = 0; continue;
+        }
+        /* a hybrid node has exactly two parents: a node is a recipient once */
+        int dup = 0;
+        for (int j = 0; j < k; j++)
+            if (!g->items[j].bidir && resolution_find(r, g->items[j].recip) == R) { dup = 1; break; }
+        if (dup) {
+            diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
+                "introgression: '%s' is the recipient of more than one event (a hybrid "
+                "node has two parents).", e->recip);
+            ok = 0; continue;
+        }
+
+        if (!e->label) {
+            char buf[32];
+            do { snprintf(buf, sizeof buf, "H%d", ++autonum); }
+            while (name_taken(r, g, k, buf));
+            e->label = xstrdup(buf);
+        }
+        if (!D->is_leaf) D->show_label = 1;   /* donor population must be named */
+    }
+    return ok;
+}
+
+/* --- extended-Newick emission ------------------------------------------ */
+
+static const char *tau_str(TauEnd e) { return e == TAU_NODE ? "no" : "yes"; }
+
+static char model_letter(const IntroEvent *e)
+{
+    if (e->bidir) return 'D';
+    int yes = (e->src == TAU_BRANCH) + (e->dst == TAU_BRANCH);
+    return yes == 2 ? 'A' : yes == 1 ? 'B' : 'C';
+}
+
+static char *emit_rec(const IntroList *g, TreeNode **dn, TreeNode **rn,
+                      const TreeNode *n)
+{
+    char *core;
+    if (n->is_leaf) {
+        core = xstrdup(n->name);
+    } else {
+        core = xstrdup("(");
+        for (int i = 0; i < n->n_children; i++) {
+            char *c = emit_rec(g, dn, rn, n->children[i]);
+            char *t = xasprintf("%s%s%s", core, i ? "," : "", c);
+            free(core); free(c); core = t;
+        }
+        char *t = xasprintf("%s)%s", core, n->show_label ? treenode_bpp_name(n) : "");
+        free(core); core = t;
+    }
+    /* recipient: this lineage flows up into a hybrid node (subtree occurrence) */
+    for (int k = 0; k < g->count; k++) {
+        if (rn[k] == n) {
+            char *t = xasprintf("(%s)%s[&tau-parent=%s]",
+                                core, g->items[k].label, tau_str(g->items[k].dst));
+            free(core); core = t;
+            break;
+        }
+    }
+    /* donor: graft the bare hybrid reference (carrying phi) as a sibling */
+    for (int k = 0; k < g->count; k++) {
+        if (dn[k] == n) {
+            char *t = xasprintf("(%s,%s[&phi=%g,&tau-parent=%s])",
+                                core, g->items[k].label, g->items[k].phi,
+                                tau_str(g->items[k].src));
+            free(core); core = t;
+        }
+    }
+    return core;
+}
+
+char *introgress_newick(const IntroList *g, Resolution *r)
+{
+    if (g->count == 0 || !r->root) return NULL;
+    TreeNode **dn = xmalloc((size_t)g->count * sizeof *dn);
+    TreeNode **rn = xmalloc((size_t)g->count * sizeof *rn);
+    for (int k = 0; k < g->count; k++) {
+        dn[k] = resolution_find(r, g->items[k].donor);
+        rn[k] = resolution_find(r, g->items[k].recip);
+    }
+    char *s = emit_rec(g, dn, rn, r->root);
+    free(dn); free(rn);
+    return s;
+}
+
+void introgress_legend(const IntroList *g, Resolution *r, FILE *fp, int color)
+{
+    if (g->count == 0) return;
+    fputs("introgressions:\n", fp);
+    for (int k = 0; k < g->count; k++) {
+        const IntroEvent *e = &g->items[k];
+        TreeNode *D = resolution_find(r, e->donor);
+        TreeNode *R = resolution_find(r, e->recip);
+        const char *dn = D ? treenode_bpp_name(D) : e->donor;
+        const char *rn = R ? treenode_bpp_name(R) : e->recip;
+        fputs("  ", fp);
+        if (color) fputs(treenode_mig_color(k + 1), fp);
+        fputs(e->label, fp);
+        if (color) fputs(TREENODE_MIG_RESET, fp);
+        /* U+21DD rightwards squiggle arrow */
+        fprintf(fp, ":  %s \xe2\x87\x9d %s   phi=%g  [model %c]\n",
+                dn, rn, e->phi, model_letter(e));
+    }
+}
