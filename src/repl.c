@@ -331,6 +331,44 @@ static void cmd_list(const Workspace *ws)
     }
 }
 
+/* List the taxa associated with a tree: the tips in it, and the species in the
+ * attached imap (the pool to build from), flagging any not yet used. */
+static void cmd_taxa(const NamedTree *t)
+{
+    DiagList e, w; JoinList j;
+    diag_init(&e); diag_init(&w);
+    Resolution *r = tree_build(t, &j, &e, &w);
+
+    printf("tips in tree (%d):", r->n_leaves);
+    for (int i = 0; i < r->n_leaves; i++) printf(" %s", r->leaves[i]->name);
+    printf("\n");
+
+    if (t->imap_path) {
+        DiagList ie; diag_init(&ie);
+        Imap *m = imap_read(t->imap_path, &ie);
+        if (!m) {
+            print_diags(&ie, "error");
+        } else {
+            printf("imap species (%d):", m->count);
+            for (int i = 0; i < m->count; i++) printf(" %s", m->items[i].species);
+            printf("\n");
+            int any = 0;
+            for (int i = 0; i < m->count; i++) {
+                int in = 0;
+                for (int k = 0; k < r->n_leaves; k++)
+                    if (strcmp(m->items[i].species, r->leaves[k]->name) == 0) { in = 1; break; }
+                if (!in) { if (!any) { printf("not yet in tree:"); any = 1; } printf(" %s", m->items[i].species); }
+            }
+            if (any) printf("\n");
+            imap_free(m);
+        }
+        diag_free(&ie);
+    } else {
+        printf("(no imap attached — 'imap FILE' adds a taxon pool)\n");
+    }
+    resolution_free(r); joinlist_free(&j); diag_free(&e); diag_free(&w);
+}
+
 static void print_help(void)
 {
     fputs(
@@ -347,6 +385,7 @@ static void print_help(void)
 "  block replace FILE replace the species&tree block in a BPP control file\n"
 "  imap [FILE]        attach an Imap file (no arg: show; 'clear': detach)\n"
 "  status             taxa count, completeness, and any guidance\n"
+"  taxa               list the tree's tips and the attached imap's species\n"
 "  history            list the commands entered this session\n"
 "  trees              list trees in memory (active marked '*')\n"
 "  save NAME          save a copy of the active tree as NAME\n"
@@ -397,6 +436,7 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
     if (IS("quit") || IS("exit") || IS("q")) { *quit = 1; return; }
     if (IS("help") || IS("h") || IS("?"))    { print_help(); return; }
     if (IS("trees") || IS("list") || IS("ls")) { cmd_list(ws); return; }
+    if (IS("taxa") || IS("species"))         { cmd_taxa(ws_active(ws)); return; }
     if (IS("history") || IS("hist")) {
         for (int i = 0; i < hist->n; i++) printf("  %d  %s\n", i + 1, hist->items[i]);
         return;
@@ -540,9 +580,9 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
 /* --- tab completion ----------------------------------------------------- */
 
 static const char *const COMMANDS[] = {
-    "help", "quit", "exit", "display", "newick", "block", "imap", "status",
-    "trees", "history", "save", "use", "new", "drop", "move", "graft", "prune",
-    "remove", "rotate",
+    "help", "quit", "exit", "display", "newick", "block", "imap", "taxa",
+    "status", "trees", "history", "save", "use", "new", "drop", "move", "graft",
+    "prune", "remove", "rotate",
     NULL
 };
 
@@ -564,6 +604,19 @@ static void collect_nodes(const TreeNode *nd, char ***arr, int *n, int *cap)
     for (int i = 0; i < nd->n_children; i++) collect_nodes(nd->children[i], arr, n, cap);
 }
 
+/* species names from an attached imap file (so they complete before use). */
+static void add_imap_species(const char *path, char ***arr, int *n, int *cap)
+{
+    if (!path) return;
+    DiagList e; diag_init(&e);
+    Imap *m = imap_read(path, &e);
+    if (m) {
+        for (int i = 0; i < m->count; i++) add_cand(arr, n, cap, m->items[i].species);
+        imap_free(m);
+    }
+    diag_free(&e);
+}
+
 static int repl_complete(const char *buf, int wstart, int wend, char ***out, void *ctx)
 {
     Workspace *ws = ctx;
@@ -572,10 +625,10 @@ static int repl_complete(const char *buf, int wstart, int wend, char ***out, voi
         if (!isspace((unsigned char)buf[i])) { is_cmd = 0; break; }
 
     char **all = NULL; int n = 0, cap = 0;
-    if (is_cmd) {
-        for (int i = 0; COMMANDS[i]; i++) add_cand(&all, &n, &cap, COMMANDS[i]);
-    } else {
-        NamedTree *t = ws_active(ws);
+    NamedTree *t = ws_active(ws);
+
+    /* clade/tip names in the current tree (offered in any position) */
+    {
         DiagList e, w; JoinList j;
         diag_init(&e); diag_init(&w);
         Resolution *r = tree_build(t, &j, &e, &w);
@@ -583,6 +636,10 @@ static int repl_complete(const char *buf, int wstart, int wend, char ***out, voi
         else for (int i = 0; i < r->n_leaves; i++) add_cand(&all, &n, &cap, r->leaves[i]->name);
         resolution_free(r); joinlist_free(&j); diag_free(&e); diag_free(&w);
     }
+    /* plus species from the attached imap, even if not yet in the tree */
+    add_imap_species(t->imap_path, &all, &n, &cap);
+    /* commands only complete at the start of a line */
+    if (is_cmd) for (int i = 0; COMMANDS[i]; i++) add_cand(&all, &n, &cap, COMMANDS[i]);
 
     int wlen = wend - wstart;
     const char *word = buf + wstart;

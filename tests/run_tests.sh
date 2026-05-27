@@ -314,11 +314,17 @@ else pass=$((pass+1)); fi
 sg="$(printf 'E+G\nA+E_G\ngraft (P+Q; R+S)->E_G\nnewick\nquit\n' | "$BIN" -i 2>&1)"
 chk_contains ti26 "$sg" '(A,((E,G),((P,Q),(R,S))));'
 
+# 'taxa' lists tree tips and the attached imap's species (flagging unused ones)
+st="$(printf 'EAS+AMR\nimap %s\ntaxa\nquit\n' "$FIX/samples.imap" | "$BIN" -i 2>&1)"
+chk_contains ti27 "$st" 'imap species (4):'
+chk_contains ti28 "$st" 'not yet in tree:'
+
 # --- Interactive line editor (PTY; requires python3) ---------------------
 if command -v python3 >/dev/null 2>&1; then
-    if python3 - "$BIN" <<'PY'
+    if python3 - "$BIN" "$FIX/samples.imap" <<'PY'
 import pty, os, select, time, sys
 BIN = sys.argv[1]
+IMAP = sys.argv[2]
 def session(keys):
     pid, fd = pty.fork()
     if pid == 0:
@@ -347,8 +353,10 @@ o2 = session([b"A+B"+CR, b"newick"+CR, UP, BS*6, b"trees"+CR, b"quit"+CR])
 o3 = session([b"A+B"+CR, b"C+D"+CR, b"disp"+TAB, CR, b"quit"+CR])
 # Tab completes a clade name: 'C_' -> 'C_D', then prune leaves (A,B)
 o4 = session([b"A+B"+CR, b"C+D"+CR, b"prune C_"+TAB, CR, b"newick"+CR, b"quit"+CR])
+# Tab completes an imap species not yet in the tree: 'EU' -> 'EUR'
+o5 = session([("imap %s" % IMAP).encode()+CR, b"EU"+TAB, b"+AFR"+CR, b"newick"+CR, b"quit"+CR])
 ok = (o1.count("(A,B);") >= 2 and ("main" in o2) and o2.count("(A,B);") == 1
-      and "┬" in o3 and "(A,B);" in o4)
+      and "┬" in o3 and "(A,B);" in o4 and "(EUR,AFR);" in o5)
 sys.exit(0 if ok else 1)
 PY
     then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL te1: PTY line-editor recall/edit/completion"; fi
