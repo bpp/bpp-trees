@@ -259,7 +259,8 @@ bpp-tree> quit
 | `undo` | undo the last change to the active tree |
 | `display [ascii]` / `newick` / `status` | view the active tree |
 | `imap FILE` | attach an Imap to the active tree (no arg: show; `clear`: detach) |
-| `block` | print the BPP `species&tree` block (counts from the imap) |
+| `block [FILE]` | print the `species&tree` block (stdout, or write to `FILE`) |
+| `block replace FILE` | replace the `species&tree` block inside a BPP control file |
 | `trees` | list trees in memory (active marked `*`) |
 | `save NAME` | save a copy of the active tree as `NAME` |
 | `use NAME` | make `NAME` the active tree |
@@ -281,6 +282,12 @@ species&tree = 4  AFR  EUR  EAS  AMR
    2  2  2  2
   (AFR,(EUR,(EAS,AMR)));
 ```
+
+`block FILE` writes the block to a file, and `block replace FILE` edits an
+existing BPP control file in place — locating its `species&tree` statement
+(names, counts, and the Newick, even when they wrap across lines) and swapping
+in the new one, leaving the rest of the file untouched (the original is saved
+to `FILE.bak`).
 
 ## Validation
 

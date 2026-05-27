@@ -287,6 +287,22 @@ chk_contains ti19 "$s9" '?  ?  ?  ?'
 s10="$(printf 'A+B\nimap /no/such/file.imap\nquit\n' | "$BIN" -i 2>&1)"
 chk_contains ti20 "$s10" 'cannot open'
 
+# 'block FILE' writes the block to a file
+printf 'A+B\nC+D\nblock %s/out.stree\nquit\n' "$TMP" | "$BIN" -i >/dev/null 2>&1
+chk_contains ti21 "$(cat "$TMP/out.stree" 2>/dev/null)" 'species&tree = 4  A  B  C  D'
+
+# 'block replace FILE' splices into an existing control file, keeping the rest
+cp "$FIX/bpp.ctl" "$TMP/ctl"
+printf 'A+B\nC+D\nblock replace %s\nquit\n' "$TMP/ctl" | "$BIN" -i >/dev/null 2>&1
+ctl="$(cat "$TMP/ctl" 2>/dev/null)"
+chk_contains ti22 "$ctl" '((A,B),(C,D));'        # new newick spliced in
+chk_contains ti23 "$ctl" 'phase = 0 0 0 0'       # surrounding statements preserved
+chk_contains ti24 "$ctl" 'tauprior'              # ... below the block too
+# the original multi-line block is gone (old newick replaced)
+if [[ "$ctl" == *"(AFR, (EUR, (EAS, AMR)))"* ]]; then
+    fail=$((fail+1)); echo "FAIL ti25: old species&tree block not removed"
+else pass=$((pass+1)); fi
+
 # --- Interactive line editor (PTY; requires python3) ---------------------
 if command -v python3 >/dev/null 2>&1; then
     if python3 - "$BIN" <<'PY'

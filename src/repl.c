@@ -217,7 +217,25 @@ static void cmd_newick(const NamedTree *t)
     diag_free(&errs); diag_free(&warns);
 }
 
-static void cmd_block(const NamedTree *t)
+static char *read_file_all(const char *path)
+{
+    FILE *f = fopen(path, "r");
+    if (!f) return NULL;
+    size_t cap = 4096, len = 0;
+    char *buf = xmalloc(cap);
+    size_t r;
+    while ((r = fread(buf + len, 1, cap - len, f)) > 0) {
+        len += r;
+        if (len == cap) { cap *= 2; buf = xrealloc(buf, cap); }
+    }
+    buf[len] = '\0';
+    fclose(f);
+    return buf;
+}
+
+/* `arg`: empty -> stdout; "replace FILE" -> splice into a control file;
+ * otherwise -> write the block to FILE. */
+static void cmd_block(const NamedTree *t, const char *arg)
 {
     if (t->n_ops == 0) { printf("(empty tree — add joins first)\n"); return; }
     DiagList errs, warns; JoinList joins;
@@ -244,16 +262,55 @@ static void cmd_block(const NamedTree *t)
     }
     int filled = 0, *counts = NULL;
     char *block = species_block(taxa, nt, nwk, m, &filled, &counts);
-    printf("%s\n", block);
-    if (!filled) {
-        if (!t->imap_path)
-            printf("(counts are '?'; attach an Imap with 'imap FILE')\n");
-        else {
-            printf("(no count for:");
-            for (int i = 0; i < nt; i++) if (counts[i] < 0) printf(" %s", taxa[i]->name);
-            printf(")\n");
+
+    while (*arg == ' ' || *arg == '\t') arg++;
+
+    if (*arg == '\0') {                                 /* print to stdout */
+        printf("%s\n", block);
+        if (!filled) {
+            if (!t->imap_path)
+                printf("(counts are '?'; attach an Imap with 'imap FILE')\n");
+            else {
+                printf("(no count for:");
+                for (int i = 0; i < nt; i++) if (counts[i] < 0) printf(" %s", taxa[i]->name);
+                printf(")\n");
+            }
         }
+    } else if (strncmp(arg, "replace", 7) == 0 &&
+               (arg[7] == ' ' || arg[7] == '\t' || arg[7] == '\0')) {
+        const char *file = arg + 7;                     /* replace in a control file */
+        while (*file == ' ' || *file == '\t') file++;
+        if (!*file) {
+            printf("usage: block replace FILE\n");
+        } else {
+            char *txt = read_file_all(file);
+            if (!txt) {
+                printf("cannot read '%s'\n", file);
+            } else {
+                const char *err = NULL;
+                char *outc = control_replace_block(txt, block, &err);
+                if (!outc) {
+                    printf("%s\n", err);
+                } else {
+                    char *bak = xasprintf("%s.bak", file);
+                    FILE *fb = fopen(bak, "w");
+                    if (fb) { fputs(txt, fb); fclose(fb); }
+                    FILE *fo = fopen(file, "w");
+                    if (!fo) { printf("cannot write '%s'\n", file); }
+                    else { fputs(outc, fo); fclose(fo);
+                           printf("replaced species&tree in '%s' (backup: %s)\n", file, bak); }
+                    free(bak); free(outc);
+                }
+                free(txt);
+            }
+        }
+    } else {                                            /* write block to a file */
+        FILE *fo = fopen(arg, "w");
+        if (!fo) printf("cannot write '%s'\n", arg);
+        else { fprintf(fo, "%s\n", block); fclose(fo);
+               printf("wrote species&tree block to '%s'\n", arg); }
     }
+
     free(taxa); free(nwk); free(block); free(counts); imap_free(m);
     resolution_free(r); joinlist_free(&joins); diag_free(&errs); diag_free(&warns);
 }
@@ -286,7 +343,8 @@ static void print_help(void)
 "  undo               undo the last change to the active tree\n"
 "  display [ascii]    show the active tree as a branching diagram\n"
 "  newick             print the active tree's Newick string\n"
-"  block              print the BPP species&tree block (counts from the imap)\n"
+"  block [FILE]       print the species&tree block (to stdout, or write to FILE)\n"
+"  block replace FILE replace the species&tree block in a BPP control file\n"
 "  imap [FILE]        attach an Imap file (no arg: show; 'clear': detach)\n"
 "  status             taxa count, completeness, and any guidance\n"
 "  history            list the commands entered this session\n"
@@ -345,7 +403,7 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
     }
     if (IS("status") || IS("st"))            { show_status(ws_active(ws)); return; }
     if (IS("newick") || IS("nwk"))           { cmd_newick(ws_active(ws)); return; }
-    if (IS("block"))                         { cmd_block(ws_active(ws)); return; }
+    if (IS("block"))                         { cmd_block(ws_active(ws), arg); return; }
     if (IS("imap")) {
         NamedTree *t = ws_active(ws);
         if (!*arg) {
