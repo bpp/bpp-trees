@@ -8,6 +8,7 @@
 #include "diag.h"
 #include "util.h"
 #include "json_writer.h"
+#include "repl.h"
 
 #include <getopt.h>
 #include <stdio.h>
@@ -24,6 +25,7 @@ typedef struct {
     int   validate_only;
     int   display;        /* --display */
     int   ascii;          /* --ascii */
+    int   interactive;    /* -i / --interactive */
     char *joins_string;   /* --joins */
     char *imap_path;      /* --imap */
     char *out_prefix;     /* --out */
@@ -181,6 +183,7 @@ static void usage(FILE *fp)
 "General:\n"
 "  -h, --help            Show this help and exit\n"
 "      --version         Show version and exit\n"
+"  -i, --interactive     Start interactive mode (a workspace of named trees)\n"
 "      --json            Output JSON instead of human-readable text\n"
 "      --json-indent N   JSON indentation width [2]\n"
 "      --quiet           Suppress warnings/progress on stderr\n"
@@ -216,6 +219,7 @@ int main(int argc, char **argv)
            OPT_DISPLAY, OPT_ASCII };
     static struct option lo[] = {
         {"help",        no_argument,       0, 'h'},
+        {"interactive", no_argument,       0, 'i'},
         {"version",     no_argument,       0, OPT_VERSION},
         {"json",        no_argument,       0, OPT_JSON},
         {"json-indent", required_argument, 0, OPT_INDENT},
@@ -233,9 +237,10 @@ int main(int argc, char **argv)
     };
 
     int c;
-    while ((c = getopt_long(argc, argv, "h", lo, NULL)) != -1) {
+    while ((c = getopt_long(argc, argv, "hi", lo, NULL)) != -1) {
         switch (c) {
             case 'h':          usage(stdout); return 0;
+            case 'i':          o.interactive = 1; break;
             case OPT_VERSION:  printf("bpp-tree %s\n", BPP_TREE_VERSION); return 0;
             case OPT_JSON:     o.json = 1; break;
             case OPT_INDENT:   o.json_indent = atoi(optarg); break;
@@ -253,6 +258,21 @@ int main(int argc, char **argv)
         }
     }
     if (optind < argc) o.joins_file = argv[optind];
+
+    /* Interactive mode: optionally seed the first tree from a file or string. */
+    if (o.interactive) {
+        char *seed = NULL, *owned = NULL;
+        if (o.joins_string) {
+            seed = o.joins_string;
+        } else if (o.joins_file) {
+            owned = read_file(o.joins_file);
+            if (!owned) { fprintf(stderr, "bpp-tree: cannot open '%s'\n", o.joins_file); return 2; }
+            seed = owned;
+        }
+        int rc = repl_run(seed);
+        free(owned);
+        return rc;
+    }
 
     /* Catch the common mistake of an unquoted --joins string: the shell
      * splits 'A+B, A_B+C' into a --joins value plus stray arguments. */

@@ -102,6 +102,7 @@ bpp-tree [options] [JOINS_FILE]
 | Option | Description |
 | --- | --- |
 | `-h, --help` | Show help and exit |
+| `-i, --interactive` | Start interactive mode (workspace of named trees) |
 | `--version` | Show version and exit |
 | `--json` | Emit structured JSON (for tooling / agents) |
 | `--json-indent N` | JSON indentation width (default 2) |
@@ -184,6 +185,48 @@ A tip in the list is ignored (it has no children to rotate); an identifier
 that names no clade is an error.
 
 **Exit codes:** `0` valid · `1` errors in the join formula · `2` system error.
+
+## Interactive mode
+
+`bpp-tree -i` opens a workspace of named trees held in memory. Exactly one
+tree is *active*; anything you type that isn't a command is read as a join and
+added to it, and `move`/`rotate` edit it — all changes are kept in memory.
+`bpp-tree -i FILE` (or `-i --joins '...'`) seeds the first tree.
+
+```
+$ bpp-tree -i
+bpp-tree interactive mode. Type 'help' for commands, 'quit' to exit.
+bpp-tree> A+B
+[main] 2 taxa, tree complete
+bpp-tree> C+D
+[main] 4 taxa, tree complete
+bpp-tree> save balanced
+bpp-tree> move A_B -> C_D
+bpp-tree> new caterpillar
+bpp-tree> A_B+C            # auto-creates the A_B pair
+bpp-tree> A_B_C+D
+bpp-tree> display
+bpp-tree> use balanced
+bpp-tree> quit
+```
+
+| Command | Action |
+| --- | --- |
+| `A+B` (any join) | add a join to the active tree |
+| `move SRC -> DST` | prune `SRC`, regraft as sister of `DST` |
+| `rotate LIST` | reverse children of the named clade(s) |
+| `undo` | undo the last change to the active tree |
+| `display [ascii]` / `newick` / `status` | view the active tree |
+| `trees` | list trees in memory (active marked `*`) |
+| `save NAME` | save a copy of the active tree as `NAME` |
+| `use NAME` | make `NAME` the active tree |
+| `new NAME` | start a new empty tree and make it active |
+| `drop NAME` | delete a tree |
+| `help` / `quit` | help; leave (also `exit`, or EOF) |
+
+Each tree is stored as its joins plus an ordered list of moves/rotations and
+recomputed on demand, so the declarative join set stays order-free while edits
+remain an explicit, ordered layer.
 
 ## Validation
 

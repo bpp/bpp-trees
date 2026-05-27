@@ -216,6 +216,33 @@ else
     echo "skip t39: bpp-lint not found at $LINT"
 fi
 
+# --- Interactive mode (REPL) ---------------------------------------------
+chk_contains() {
+    local name="$1" hay="$2" needle="$3"
+    if [[ "$hay" == *"$needle"* ]]; then pass=$((pass+1))
+    else fail=$((fail+1)); printf 'FAIL %s: %q not in REPL output\n' "$name" "$needle"; fi
+}
+
+# build, save, switch trees, undo
+s1="$(printf 'A+B\nC+D\nnewick\nsave bal\nnew p\nA+B\nA_B+C\nnewick\ntrees\nuse bal\nnewick\nquit\n' | "$BIN" -i 2>&1)"
+chk_contains ti1 "$s1" '((A,B),(C,D));'      # active 'main' newick
+chk_contains ti2 "$s1" '((A,B),C);'          # 'p' (pectinate) newick
+chk_contains ti3 "$s1" 'bal'                 # saved tree shown in 'trees'
+chk_contains ti4 "$s1" '* p'                 # active marker on 'p'
+
+# moves apply in the session
+s2="$(printf 'A+B\nC+D_E\nA_B+C_D_E\nmove A_B->D_E\nnewick\nquit\n' | "$BIN" -i 2>&1)"
+chk_contains ti5 "$s2" '(C,((D,E),(A,B)));'
+
+# empty + incomplete states
+s3="$(printf 'new x\nstatus\nA+B\nC+D\nE+F\nstatus\nquit\n' | "$BIN" -i 2>&1)"
+chk_contains ti6 "$s3" 'empty'
+chk_contains ti7 "$s3" 'incomplete'
+
+# undo removes the last change
+s4="$(printf 'A+B\nA_B+C\nnewick\nundo\nnewick\nquit\n' | "$BIN" -i 2>&1)"
+chk_contains ti8 "$s4" '(A,B);'              # after undo, back to 2-taxon tree
+
 echo
 echo "passed: $pass   failed: $fail"
 [[ "$fail" == 0 ]]
