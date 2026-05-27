@@ -578,6 +578,18 @@ void resolution_graft(Resolution *r, const char *spec, DiagList *errs, DiagList 
             diag_set_hint(d, "a species name cannot contain '_'.");
             free(piece); continue;
         }
+        /* a tip name may contain only letters, digits and '-' */
+        int bad = 0;
+        for (const char *q = nw; *q; q++)
+            if (!((*q >= 'A' && *q <= 'Z') || (*q >= 'a' && *q <= 'z') ||
+                  (*q >= '0' && *q <= '9') || *q == '-')) { bad = 1; break; }
+        if (bad) {
+            Diagnostic *d = diag_add(errs, DIAG_GRAFT_INVALID, -1,
+                "graft: '%s' is not a valid new tip name.", nw);
+            diag_set_hint(d, "graft adds one new tip (letters, digits, '-'); to "
+                             "relocate an existing clade use 'move'.");
+            free(piece); continue;
+        }
         TreeNode *tnode = find_node(r->root, tgt);
         if (!tnode) {
             diag_add(errs, DIAG_GRAFT_UNKNOWN, -1,

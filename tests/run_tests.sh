@@ -138,6 +138,8 @@ check tg1 '((A,B),(C,(D,E)));'  --quiet --newick-only --joins 'A+B,C+D' --graft 
 check tg2 '(((A,B),E),(C,D));'  --quiet --newick-only --joins 'A+B,C+D' --graft 'E->A_B'  # onto a clade
 has   tg3 'GRAFT_UNKNOWN'        --joins 'A+B,C+D' --graft 'E->ZZ'                          # bad target
 has   tg4 'GRAFT_INVALID'        --joins 'A+B,C+D' --graft 'A->C'                           # tip already present
+has   tg5 'GRAFT_INVALID'        --joins 'A+B'     --graft 'E+F->A'                         # '+' not a valid tip name
+has   tg6 'GRAFT_INVALID'        --joins 'A+B'     --graft 'X=Y->A'                         # '=' not a valid tip name
 
 # --- Prune (remove a tip or subtree) -------------------------------------
 check tp1 '(B,(C,D));'          --quiet --newick-only --joins 'A+B,C+D' --prune 'A'        # remove a tip
