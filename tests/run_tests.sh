@@ -339,12 +339,27 @@ chk_contains ti29 "$smig" 'added migration M1'
 chk_contains ti30 "$smig" 'migration = 2'
 chk_contains ti31 "$smig" 'do not coexist'      # A_B->A rejected (A is inside A_B)
 
+# session persistence: named trees are saved (scratch 'main' is not), restored
+printf 'A+B\nnew keep\nX+Y\nsession save %s/sess\nquit\n' "$TMP" | "$BIN" -i >/dev/null 2>&1
+sfile="$(cat "$TMP/sess" 2>/dev/null)"
+chk_contains ti32 "$sfile" 'tree keep'
+if [[ "$sfile" == *"tree main"* ]]; then
+    fail=$((fail+1)); echo "FAIL ti33: scratch 'main' should not be saved"
+else pass=$((pass+1)); fi
+sl="$(printf 'session load %s/sess\nuse keep\nnewick\nquit\n' "$TMP" | "$BIN" -i 2>&1)"
+chk_contains ti34 "$sl" '(X,Y);'
+# imap and migration bands persist too
+printf 'new mm\nP+Q\nR+S\nmigration P->R\nsession save %s/s2\nquit\n' "$TMP" | "$BIN" -i >/dev/null 2>&1
+sl2="$(printf 'session load %s/s2\nuse mm\nmigration\nquit\n' "$TMP" | "$BIN" -i 2>&1)"
+chk_contains ti35 "$sl2" 'M1:  P → R'
+
 # --- Interactive line editor (PTY; requires python3) ---------------------
 if command -v python3 >/dev/null 2>&1; then
     if python3 - "$BIN" "$FIX/samples.imap" <<'PY'
 import pty, os, select, time, sys
 BIN = sys.argv[1]
 IMAP = sys.argv[2]
+os.environ["BPPTREE_SESSION"] = "/nonexistent/bpptree-iso"   # isolate from any saved session
 def session(keys):
     pid, fd = pty.fork()
     if pid == 0:
@@ -385,9 +400,15 @@ with open(os.path.join(hd, "zz_taxa.imap"), "w") as f: f.write("s1\tA\ns2\tB\n")
 os.environ["HOME"] = hd
 o7 = session([b"A+B"+CR, b"imap ~/zz"+TAB+CR, b"taxa"+CR, b"quit"+CR])
 shutil.rmtree(hd, ignore_errors=True)
+# session image: save a named tree (answer 'y' at the prompt), auto-restore it
+sdir = tempfile.mkdtemp(); os.environ["BPPTREE_SESSION"] = os.path.join(sdir, "sess")
+oA = session([b"new persisted"+CR, b"A+B"+CR, b"quit"+CR, b"y"+CR])
+oB = session([b"trees"+CR, b"quit"+CR, b"n"+CR])
+shutil.rmtree(sdir, ignore_errors=True)
 ok = (o1.count("(A,B);") >= 2 and ("main" in o2) and o2.count("(A,B);") == 1
       and "┬" in o3 and "(A,B);" in o4 and "(EUR,AFR);" in o5
-      and "imap species" in o6 and "imap species" in o7)
+      and "imap species" in o6 and "imap species" in o7
+      and ("restored" in oB) and ("persisted" in oB))
 sys.exit(0 if ok else 1)
 PY
     then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL te1: PTY line-editor recall/edit/completion"; fi

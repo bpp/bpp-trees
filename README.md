@@ -319,8 +319,17 @@ bpp-tree> quit
 | `use NAME` | make `NAME` the active tree |
 | `new NAME` | start a new empty tree and make it active |
 | `drop NAME` | delete a tree |
+| `session save\|load [FILE]` | save/restore named trees (see below) |
 | `history` | list the commands entered this session |
 | `help` / `quit` | help; leave (also `exit`, or EOF) |
+
+At an interactive terminal the workspace is **persisted like R's `.RData`**: on
+exit you're asked whether to save your **named** trees, and a saved session is
+restored automatically next time. The scratch `main` tree is *not* saved — to
+keep work, `save NAME` it first. The image is `.bpptree` in the current
+directory (override with `$BPPTREE_SESSION`); `session save`/`session load
+[FILE]` do it explicitly. Auto load/save only happens at a terminal, so
+piped/scripted use always starts fresh.
 
 Each tree is stored as its joins plus an ordered list of moves/rotations and
 recomputed on demand, so the declarative join set stays order-free while edits

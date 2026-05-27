@@ -258,6 +258,117 @@ static char *read_file_all(const char *path)
     return buf;
 }
 
+/* --- session persistence ------------------------------------------------ */
+
+static char op_kind_char(OpKind k)
+{
+    switch (k) {
+        case OP_JOIN:   return 'j';
+        case OP_MOVE:   return 'm';
+        case OP_GRAFT:  return 'g';
+        case OP_PRUNE:  return 'p';
+        default:        return 'r';   /* OP_ROTATE */
+    }
+}
+
+/* Number of named (non-"main") trees — "main" is a scratch buffer. */
+static int workspace_named(const Workspace *ws)
+{
+    int n = 0;
+    for (int i = 0; i < ws->n; i++) if (strcmp(ws->trees[i].name, "main") != 0) n++;
+    return n;
+}
+
+/* Save the named trees (not the scratch "main") as a small text image.
+ * Returns the number written, or -1 if the file can't be opened. */
+static int workspace_save(const Workspace *ws, const char *path)
+{
+    FILE *f = fopen(path, "w");
+    if (!f) return -1;
+    fputs("# bpp-tree session\n", f);
+    int written = 0;
+    for (int i = 0; i < ws->n; i++) {
+        const NamedTree *t = &ws->trees[i];
+        if (strcmp(t->name, "main") == 0) continue;       /* scratch: not saved */
+        fprintf(f, "tree %s\n", t->name);
+        for (int o = 0; o < t->n_ops; o++)
+            fprintf(f, "%c %s\n", op_kind_char(t->ops[o].kind), t->ops[o].spec);
+        if (t->imap_path) fprintf(f, "imap %s\n", t->imap_path);
+        for (int b = 0; b < t->mig.count; b++)
+            fprintf(f, "mig %s %s\n", t->mig.items[b].src, t->mig.items[b].dst);
+        written++;
+    }
+    fprintf(f, "active %s\n", ws->trees[ws->active].name);
+    fclose(f);
+    return written;
+}
+
+/* Replace the workspace with the image in `path`. Returns the number of trees
+ * loaded, or -1 if the file can't be read. */
+static int workspace_load(Workspace *ws, const char *path)
+{
+    char *txt = read_file_all(path);
+    if (!txt) return -1;
+
+    for (int i = 0; i < ws->n; i++) tree_free(&ws->trees[i]);
+    ws->n = 0; ws->active = 0;
+
+    char *active = NULL;
+    NamedTree *cur = NULL;
+    char *line = txt, *nl;
+    while (*line) {
+        nl = strchr(line, '\n');
+        size_t len = nl ? (size_t)(nl - line) : strlen(line);
+        char *s = xstrndup(line, len);
+        char *p = s;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p && *p != '#') {
+            char *kw = p;
+            while (*p && *p != ' ' && *p != '\t') p++;
+            size_t kl = (size_t)(p - kw);
+            while (*p == ' ' || *p == '\t') p++;          /* p = rest of line */
+            char *re = p + strlen(p);
+            while (re > p && (re[-1]==' '||re[-1]=='\t'||re[-1]=='\r')) *--re = '\0';
+            #define KW(w) (kl == strlen(w) && strncmp(kw, w, kl) == 0)
+            if (KW("tree")) {
+                NamedTree t; tree_init(&t, p);
+                cur = &ws->trees[ws_add(ws, t)];
+            } else if (KW("active")) {
+                free(active); active = xstrdup(p);
+            } else if (KW("imap") && cur) {
+                free(cur->imap_path); cur->imap_path = *p ? xstrdup(p) : NULL;
+            } else if (KW("mig") && cur) {
+                char *q = p; while (*q && *q != ' ' && *q != '\t') q++;
+                if (*q) { *q++ = '\0'; while (*q==' '||*q=='\t') q++;
+                          if (*q) miglist_add(&cur->mig, p, q); }
+            } else if (kl == 1 && cur && *p) {
+                OpKind k; int ok = 1;
+                switch (kw[0]) {
+                    case 'j': k = OP_JOIN; break;  case 'm': k = OP_MOVE; break;
+                    case 'g': k = OP_GRAFT; break; case 'p': k = OP_PRUNE; break;
+                    case 'r': k = OP_ROTATE; break; default: ok = 0; k = OP_JOIN;
+                }
+                if (ok) tree_add_op(cur, k, p);
+            }
+            #undef KW
+        }
+        free(s);
+        if (!nl) break;
+        line = nl + 1;
+    }
+    free(txt);
+    /* always keep a scratch "main" available */
+    if (ws_find(ws, "main") < 0) { NamedTree t; tree_init(&t, "main"); ws_add(ws, t); }
+    if (active) { int idx = ws_find(ws, active); if (idx >= 0) ws->active = idx; free(active); }
+    return ws->n;
+}
+
+static const char *session_file(void)
+{
+    const char *p = getenv("BPPTREE_SESSION");
+    return p ? p : ".bpptree";
+}
+
 /* `arg`: empty -> stdout; "replace FILE" -> splice into a control file;
  * otherwise -> write the block to FILE. */
 static void cmd_block(const NamedTree *t, const char *arg)
@@ -436,6 +547,7 @@ static void print_help(void)
 "  use NAME           make NAME the active tree\n"
 "  new NAME           start a new empty tree named NAME and make it active\n"
 "  drop NAME          delete the named tree\n"
+"  session save|load [FILE]  save/load named trees (auto on a terminal)\n"
 "  help               show this help\n"
 "  quit               leave (also: exit, or end-of-file)\n",
         stdout);
@@ -483,6 +595,25 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
     if (IS("taxa") || IS("species"))         { cmd_taxa(ws_active(ws)); return; }
     if (IS("history") || IS("hist")) {
         for (int i = 0; i < hist->n; i++) printf("  %d  %s\n", i + 1, hist->items[i]);
+        return;
+    }
+    if (IS("session")) {
+        int save = strncmp(arg, "save", 4) == 0 && (arg[4]==' '||arg[4]=='\t'||arg[4]=='\0');
+        int load = strncmp(arg, "load", 4) == 0 && (arg[4]==' '||arg[4]=='\t'||arg[4]=='\0');
+        if (!save && !load) { printf("usage: session save|load [FILE]\n"); return; }
+        const char *fa = arg + 4; while (*fa == ' ' || *fa == '\t') fa++;
+        char *full = expand_tilde(*fa ? fa : session_file());
+        if (save) {
+            int nw = workspace_save(ws, full);
+            if (nw < 0)       printf("cannot write '%s'\n", full);
+            else if (nw == 0) printf("nothing to save (only 'main'; use 'save NAME' to keep a tree)\n");
+            else              printf("saved %d tree(s) to '%s'\n", nw, full);
+        } else {
+            int n = workspace_load(ws, full);
+            if (n < 0) printf("cannot read '%s'\n", full);
+            else       printf("loaded session from '%s' (active: %s)\n", full, ws_active(ws)->name);
+        }
+        free(full);
         return;
     }
     if (IS("status") || IS("st"))            { show_status(ws_active(ws)); return; }
@@ -676,8 +807,8 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
 
 static const char *const COMMANDS[] = {
     "help", "quit", "exit", "display", "newick", "block", "imap", "migration",
-    "taxa", "status", "trees", "history", "save", "use", "new", "drop", "move",
-    "graft", "prune", "remove", "rotate",
+    "taxa", "status", "trees", "history", "session", "save", "use", "new",
+    "drop", "move", "graft", "prune", "remove", "rotate",
     NULL
 };
 
@@ -778,7 +909,8 @@ static int repl_complete(const char *buf, int wstart, int wend, char ***out, voi
         int b = 0; while (buf[b] == ' ' || buf[b] == '\t') b++;
         int we = b; while (buf[we] && buf[we] != ' ' && buf[we] != '\t') we++;
         char *cmd = xstrndup(buf + b, (size_t)(we - b));
-        if (strcmp(cmd, "imap") == 0 || strcmp(cmd, "block") == 0) {
+        if (strcmp(cmd, "imap") == 0 || strcmp(cmd, "block") == 0 ||
+            strcmp(cmd, "session") == 0) {
             add_path_candidates(word, &all, &n, &cap);          /* file paths */
         } else if (strcmp(cmd, "use") == 0 || strcmp(cmd, "switch") == 0 ||
                    strcmp(cmd, "drop") == 0 || strcmp(cmd, "delete") == 0 ||
@@ -822,6 +954,18 @@ int repl_run(const char *seed_joins)
               "Up/down arrows recall previous commands; Tab completes commands "
               "and clade names.\n",
               stdout);
+
+    /* Restore a saved session at an interactive prompt, unless a tree was
+     * supplied to seed the first tree. */
+    if (tty && !(seed_joins && *seed_joins)) {
+        FILE *sf = fopen(session_file(), "r");
+        if (sf) {
+            fclose(sf);
+            int n = workspace_load(&ws, session_file());
+            if (n >= 0)
+                printf("restored %d tree(s) from '%s'\n", workspace_named(&ws), session_file());
+        }
+    }
     if (seed_joins && *seed_joins) show_status(ws_active(&ws));
 
     History hist = {0};
@@ -837,6 +981,18 @@ int repl_run(const char *seed_joins)
         free(line);
     }
     if (tty) fputc('\n', stdout);
+
+    /* Offer to save named trees on exit (R-style), if any exist. */
+    if (tty && workspace_named(&ws) > 0) {
+        printf("Save %d named tree(s) to '%s'? [y/N] ", workspace_named(&ws), session_file());
+        fflush(stdout);
+        char *ans = NULL; size_t ac = 0;
+        if (getline(&ans, &ac, stdin) > 0 && (ans[0] == 'y' || ans[0] == 'Y')) {
+            if (workspace_save(&ws, session_file()) >= 0) printf("session saved.\n");
+            else printf("could not write '%s'.\n", session_file());
+        }
+        free(ans);
+    }
 
     hist_free(&hist);
     for (int i = 0; i < ws.n; i++) tree_free(&ws.trees[i]);
