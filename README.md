@@ -239,10 +239,11 @@ added to it, and `move`/`rotate` edit it — all changes are kept in memory.
 
 At a terminal you can recall previous commands with the **up/down arrows** and
 edit them inline (←/→, Home/End, backspace) before running — handy for fixing a
-typo or tweaking a `move`/`graft`. **Tab** completes command names, clade/tip
-names of the active tree, and the species of any attached Imap (so you can
-complete a species before it is even in the tree); a second ambiguous Tab lists
-the candidates. `history` lists the commands you've entered.
+typo or tweaking a `move`/`graft`. **Tab** completion is context-aware:
+command names and clade/tip/Imap-species names at the start of a line (and as
+`move`/`graft`/… arguments); **file paths** after `imap` and `block`; and tree
+names after `use`/`drop`/`save`. A second ambiguous Tab lists the candidates.
+`history` lists the commands you've entered.
 
 ```
 $ bpp-tree -i

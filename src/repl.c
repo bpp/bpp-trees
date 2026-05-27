@@ -12,9 +12,11 @@
 #include "lineedit.h"
 
 #include <ctype.h>
+#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 /* A tree is stored as the operations that build it: joins (declarative, an
@@ -617,6 +619,49 @@ static void add_imap_species(const char *path, char ***arr, int *n, int *cap)
     diag_free(&e);
 }
 
+/* clade/tip names in a tree (built from its ops). */
+static void add_tree_names(const NamedTree *t, char ***arr, int *n, int *cap)
+{
+    DiagList e, w; JoinList j;
+    diag_init(&e); diag_init(&w);
+    Resolution *r = tree_build(t, &j, &e, &w);
+    if (r->root) collect_nodes(r->root, arr, n, cap);
+    else for (int i = 0; i < r->n_leaves; i++) add_cand(arr, n, cap, r->leaves[i]->name);
+    resolution_free(r); joinlist_free(&j); diag_free(&e); diag_free(&w);
+}
+
+/* filesystem path completions for `word` (each candidate is a full path that
+ * starts with `word`; directories get a trailing '/'). */
+static void add_path_candidates(const char *word, char ***arr, int *n, int *cap)
+{
+    const char *slash = strrchr(word, '/');
+    char *dirpart = slash ? xstrndup(word, (size_t)(slash - word) + 1) : xstrdup("");
+    const char *base = slash ? slash + 1 : word;
+    char *dir = slash ? xstrndup(word, (size_t)(slash - word) + 1) : xstrdup(".");
+
+    DIR *d = opendir(dir);
+    if (d) {
+        size_t blen = strlen(base);
+        struct dirent *e;
+        while ((e = readdir(d))) {
+            if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
+            if (strncmp(e->d_name, base, blen) != 0) continue;
+            char *full = xasprintf("%s%s", dirpart, e->d_name);
+            struct stat st;
+            if (stat(full, &st) == 0 && S_ISDIR(st.st_mode)) {
+                char *cd = xasprintf("%s/", full);
+                add_cand(arr, n, cap, cd);
+                free(cd);
+            } else {
+                add_cand(arr, n, cap, full);
+            }
+            free(full);
+        }
+        closedir(d);
+    }
+    free(dirpart); free(dir);
+}
+
 static int repl_complete(const char *buf, int wstart, int wend, char ***out, void *ctx)
 {
     Workspace *ws = ctx;
@@ -626,23 +671,32 @@ static int repl_complete(const char *buf, int wstart, int wend, char ***out, voi
 
     char **all = NULL; int n = 0, cap = 0;
     NamedTree *t = ws_active(ws);
-
-    /* clade/tip names in the current tree (offered in any position) */
-    {
-        DiagList e, w; JoinList j;
-        diag_init(&e); diag_init(&w);
-        Resolution *r = tree_build(t, &j, &e, &w);
-        if (r->root) collect_nodes(r->root, &all, &n, &cap);
-        else for (int i = 0; i < r->n_leaves; i++) add_cand(&all, &n, &cap, r->leaves[i]->name);
-        resolution_free(r); joinlist_free(&j); diag_free(&e); diag_free(&w);
-    }
-    /* plus species from the attached imap, even if not yet in the tree */
-    add_imap_species(t->imap_path, &all, &n, &cap);
-    /* commands only complete at the start of a line */
-    if (is_cmd) for (int i = 0; COMMANDS[i]; i++) add_cand(&all, &n, &cap, COMMANDS[i]);
-
-    int wlen = wend - wstart;
     const char *word = buf + wstart;
+    int wlen = wend - wstart;
+
+    if (is_cmd) {
+        /* start of a line: commands, plus taxa (a line may begin a join) */
+        for (int i = 0; COMMANDS[i]; i++) add_cand(&all, &n, &cap, COMMANDS[i]);
+        add_tree_names(t, &all, &n, &cap);
+        add_imap_species(t->imap_path, &all, &n, &cap);
+    } else {
+        /* an argument: candidate kind depends on the command */
+        int b = 0; while (buf[b] == ' ' || buf[b] == '\t') b++;
+        int we = b; while (buf[we] && buf[we] != ' ' && buf[we] != '\t') we++;
+        char *cmd = xstrndup(buf + b, (size_t)(we - b));
+        if (strcmp(cmd, "imap") == 0 || strcmp(cmd, "block") == 0) {
+            add_path_candidates(word, &all, &n, &cap);          /* file paths */
+        } else if (strcmp(cmd, "use") == 0 || strcmp(cmd, "switch") == 0 ||
+                   strcmp(cmd, "drop") == 0 || strcmp(cmd, "delete") == 0 ||
+                   strcmp(cmd, "save") == 0) {
+            for (int i = 0; i < ws->n; i++) add_cand(&all, &n, &cap, ws->trees[i].name);
+        } else {
+            add_tree_names(t, &all, &n, &cap);                  /* clades/tips */
+            add_imap_species(t->imap_path, &all, &n, &cap);
+        }
+        free(cmd);
+    }
+
     char **match = NULL; int m = 0, mc = 0;
     for (int i = 0; i < n; i++) {
         if ((int)strlen(all[i]) >= wlen && strncmp(all[i], word, (size_t)wlen) == 0) {

@@ -64,7 +64,8 @@ static void buf_set(char *buf, size_t *pos, size_t *len, const char *s)
 static int is_token_char(int c)
 {
     return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
-        || (c >= '0' && c <= '9') || c == '_' || c == '-';
+        || (c >= '0' && c <= '9') || c == '_' || c == '-'
+        || c == '/' || c == '.' || c == '~';   /* path characters too */
 }
 
 /* Replace the word [wstart,*pos) with `full`, optionally adding a space. */
@@ -122,7 +123,9 @@ static char *edit_raw(const char *prompt, History *h,
                 char **cand = NULL;
                 int nc = complete(buf, wstart, (int)pos, &cand, ctx);
                 if (nc == 1) {
-                    apply_completion(buf, &pos, &len, wstart, cand[0], 1);
+                    size_t cl = strlen(cand[0]);   /* no trailing space after a dir */
+                    int sp = (cl > 0 && cand[0][cl - 1] == '/') ? 0 : 1;
+                    apply_completion(buf, &pos, &len, wstart, cand[0], sp);
                 } else if (nc > 1) {
                     size_t lcp = strlen(cand[0]);          /* longest common prefix */
                     for (int i = 1; i < nc; i++) {
