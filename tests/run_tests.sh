@@ -153,6 +153,20 @@ check tp3 'B;'                  --quiet --newick-only --joins 'A+B' --prune 'A' 
 has   tp4 'PRUNE_UNKNOWN'        --joins 'A+B,C+D' --prune 'ZZ'                             # not in tree
 has   tp5 'PRUNE_INVALID'        --joins 'A+B,C+D' --prune 'A_B_C_D'                        # the root
 
+# --- MSC-M migration bands -----------------------------------------------
+MJ='--joins A+B,C+D,A_B+C_D'
+has tmig1 'migration = 2'             $MJ --migration 'A->C,C->B'        # block emitted
+has tmig2 'A  C'                      $MJ --migration 'A->C,C->B'        # 'src  dst' row
+has tmig3 'M1→'                       $MJ --display --migration 'A->C'   # source marker
+has tmig4 '→M1'                       $MJ --display --migration 'A->C'   # dest marker
+has tmig5 'M1:  A → C'                $MJ --display --migration 'A->C'   # legend
+check tmig6 '((A,B)A_B,(C,D)C_D);'    --newick-only $MJ --migration 'A_B->C_D'  # clade endpoints labelled
+has tmig7 'MIGRATION_INVALID'         --joins 'A+B,A_B+C' --migration 'A_B->A'   # ancestor/descendant
+has tmig7b 'do not coexist'           --joins 'A+B,A_B+C' --migration 'A_B->A'
+exit_is tmig8 1 --joins 'A+B,A_B+C' --migration 'A_B->A'
+has tmig9 'MIGRATION_UNKNOWN'         $MJ --migration 'ZZ->A'            # unknown branch
+has tmig10 '"source": "A"'            --json $MJ --migration 'A->C'      # JSON migration array
+
 # --- Tree display --------------------------------------------------------
 DSP='--quiet --display --joins A+B,C+D'
 has td1 '├─┬ A_B'    $DSP                                    # ancestor label (implicit)
@@ -318,6 +332,12 @@ chk_contains ti26 "$sg" '(A,((E,G),((P,Q),(R,S))));'
 st="$(printf 'EAS+AMR\nimap %s\ntaxa\nquit\n' "$FIX/samples.imap" | "$BIN" -i 2>&1)"
 chk_contains ti27 "$st" 'imap species (4):'
 chk_contains ti28 "$st" 'not yet in tree:'
+
+# migration bands: add, see them in 'block', and reject an ancestor/descendant band
+smig="$(printf 'A+B\nC+D\nA_B+C_D\nmigration A->C\nmigration C->B\nblock\nmigration A_B->A\nquit\n' | "$BIN" -i 2>&1)"
+chk_contains ti29 "$smig" 'added migration M1'
+chk_contains ti30 "$smig" 'migration = 2'
+chk_contains ti31 "$smig" 'do not coexist'      # A_B->A rejected (A is inside A_B)
 
 # --- Interactive line editor (PTY; requires python3) ---------------------
 if command -v python3 >/dev/null 2>&1; then

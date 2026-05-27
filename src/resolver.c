@@ -438,6 +438,11 @@ static TreeNode *find_node(TreeNode *root, const char *id)
     return find_node_label(root, id);
 }
 
+TreeNode *resolution_find(const Resolution *r, const char *id)
+{
+    return r->root ? find_node(r->root, id) : NULL;
+}
+
 static int is_ancestor(const TreeNode *anc, const TreeNode *node)
 {
     for (const TreeNode *p = node; p; p = p->parent)

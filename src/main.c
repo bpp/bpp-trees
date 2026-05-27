@@ -9,6 +9,7 @@
 #include "util.h"
 #include "json_writer.h"
 #include "block.h"
+#include "migrate.h"
 #include "repl.h"
 
 #include <getopt.h>
@@ -35,6 +36,7 @@ typedef struct {
     char *move_spec;      /* --move */
     char *graft_spec;     /* --graft */
     char *prune_spec;     /* --prune */
+    char *migration_spec; /* --migration */
     char *joins_file;     /* positional */
 } Options;
 
@@ -85,7 +87,7 @@ static void print_diag(FILE *fp, const Diagnostic *d, const char *kind)
 static void emit_json(FILE *fp, const Options *o, const Resolution *r,
                       TreeNode **taxa, int n_taxa, int n_joins,
                       const char *newick, const char *block,
-                      int counts_filled, const int *counts,
+                      int counts_filled, const int *counts, const MigList *mig,
                       const DiagList *errs, const DiagList *warns)
 {
     JsonWriter w;
@@ -110,6 +112,17 @@ static void emit_json(FILE *fp, const Options *o, const Resolution *r,
             for (int i = 0; i < n_taxa; i++) jw_kv_int(&w, taxa[i]->name, counts[i]);
             jw_obj_close(&w);
         }
+        jw_key(&w, "migration");
+        jw_arr_open(&w);
+        for (int i = 0; i < mig->count; i++) {
+            TreeNode *s = resolution_find(r, mig->items[i].src);
+            TreeNode *d = resolution_find(r, mig->items[i].dst);
+            jw_obj_open(&w);
+            jw_kv_str(&w, "source", s ? treenode_bpp_name(s) : mig->items[i].src);
+            jw_kv_str(&w, "target", d ? treenode_bpp_name(d) : mig->items[i].dst);
+            jw_obj_close(&w);
+        }
+        jw_arr_close(&w);
     }
 
     jw_key(&w, "warnings");
@@ -173,6 +186,8 @@ static void usage(FILE *fp)
 "                        the sister of DST.\n"
 "      --prune LIST      Remove tips/subtrees (',' or ';' separated clade or\n"
 "                        tip names); the parent is suppressed.\n"
+"      --migration LIST  MSC-M migration bands 'SRC->DST' (',' or ';' separated):\n"
+"                        gene flow from branch SRC to branch DST.\n"
 "      --rotate LIST     Reverse the children of each named clade (',' or ';'\n"
 "                        separated; a leaf-set label like 'A_B' or an explicit\n"
 "                        label). Tips are ignored. Changes order, not topology.\n"
@@ -191,7 +206,7 @@ int main(int argc, char **argv)
 
     enum { OPT_VERSION = 1000, OPT_JSON, OPT_INDENT, OPT_JOINS, OPT_IMAP,
            OPT_OUT, OPT_NEWICK, OPT_VALIDATE, OPT_QUIET, OPT_ROTATE, OPT_MOVE,
-           OPT_GRAFT, OPT_PRUNE, OPT_DISPLAY, OPT_ASCII };
+           OPT_GRAFT, OPT_PRUNE, OPT_MIGRATION, OPT_DISPLAY, OPT_ASCII };
     static struct option lo[] = {
         {"help",        no_argument,       0, 'h'},
         {"interactive", no_argument,       0, 'i'},
@@ -205,6 +220,7 @@ int main(int argc, char **argv)
         {"move",        required_argument, 0, OPT_MOVE},
         {"graft",       required_argument, 0, OPT_GRAFT},
         {"prune",       required_argument, 0, OPT_PRUNE},
+        {"migration",   required_argument, 0, OPT_MIGRATION},
         {"rotate",      required_argument, 0, OPT_ROTATE},
         {"display",     no_argument,       0, OPT_DISPLAY},
         {"ascii",       no_argument,       0, OPT_ASCII},
@@ -228,6 +244,7 @@ int main(int argc, char **argv)
             case OPT_MOVE:     o.move_spec = optarg; break;
             case OPT_GRAFT:    o.graft_spec = optarg; break;
             case OPT_PRUNE:    o.prune_spec = optarg; break;
+            case OPT_MIGRATION: o.migration_spec = optarg; break;
             case OPT_ROTATE:   o.rotate_spec = optarg; break;
             case OPT_DISPLAY:  o.display = 1; break;
             case OPT_ASCII:    o.ascii = 1; break;
@@ -319,6 +336,7 @@ int main(int argc, char **argv)
     /* --- analyse ------------------------------------------------------ */
     Resolution *r = NULL;
     int n_joins = 0;
+    MigList mig; miglist_init(&mig);
 
     if (syntax_errs == 0) {
         r = resolve_tree(&joins, &errs);
@@ -333,6 +351,11 @@ int main(int argc, char **argv)
             resolution_prune(r, o.prune_spec, &errs, &warns);
         if (o.rotate_spec && !errs.count)
             resolution_rotate(r, o.rotate_spec, &errs, &warns);
+        /* migration bands annotate the (final) tree for display and output */
+        if (o.migration_spec && !errs.count && r->root) {
+            miglist_parse(&mig, o.migration_spec, &errs);
+            if (!errs.count) miglist_apply(&mig, r, &errs);
+        }
         /* internal nodes of the resulting tree (includes auto-created ones) */
         if (r->root) n_joins = treenode_count_internal(r->root);
     }
@@ -352,7 +375,7 @@ int main(int argc, char **argv)
             block = species_block(taxa, n_taxa, newick, imap, &filled, &counts);
         }
         emit_json(stdout, &o, r, taxa, n_taxa, n_joins, newick, block,
-                  filled, counts, &errs, &warns);
+                  filled, counts, &mig, &errs, &warns);
         free(taxa); free(newick); free(block); free(counts);
     } else {
         /* errors → stderr, no output */
@@ -366,6 +389,8 @@ int main(int argc, char **argv)
             char *newick = newick_string(r->root);
             int filled = 0; int *counts = NULL;
             char *block = species_block(taxa, n_taxa, newick, imap, &filled, &counts);
+            char *migblk = mig.count ? migration_block(&mig, r) : NULL;
+            int color = treenode_use_color(o.ascii, stdout);
 
             if (o.newick_only) {
                 printf("%s\n", newick);
@@ -378,11 +403,13 @@ int main(int argc, char **argv)
                 if (o.display) {
                     printf("Tree:\n");
                     treenode_display(r->root, stdout, o.ascii, "  ");
+                    if (mig.count) { printf("\n"); migration_legend(&mig, r, stdout, color); }
                     printf("\n");
                 }
                 printf("BPP species&tree block:\n");
                 /* indent the block by 2 spaces on its first line for display */
                 printf("  %s\n", block);
+                if (migblk) printf("\n%s\n", migblk);
                 if (!filled)
                     printf("\nNote: replace '?' with the number of sequences per "
                            "species from your Imap file.\n");
@@ -392,6 +419,7 @@ int main(int argc, char **argv)
             if (o.display && (o.newick_only || o.validate_only)) {
                 printf("Tree:\n");
                 treenode_display(r->root, stdout, o.ascii, "  ");
+                if (mig.count) { printf("\n"); migration_legend(&mig, r, stdout, color); }
             }
 
             if (o.out_prefix && !o.validate_only) {
@@ -406,16 +434,18 @@ int main(int argc, char **argv)
                 } else {
                     fprintf(fn, "%s\n", newick);
                     fprintf(fs, "%s\n", block);
+                    if (migblk) fprintf(fs, "\n%s\n", migblk);
                 }
                 if (fn) fclose(fn);
                 if (fs) fclose(fs);
                 free(nwk); free(str);
             }
 
-            free(taxa); free(newick); free(block); free(counts);
+            free(taxa); free(newick); free(block); free(counts); free(migblk);
         }
     }
 
+    miglist_free(&mig);
     resolution_free(r);
     joinlist_free(&joins);
     imap_free(imap);

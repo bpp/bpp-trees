@@ -46,6 +46,10 @@ typedef struct {
 Resolution *resolve_tree(const JoinList *joins, DiagList *errs);
 void        resolution_free(Resolution *r);
 
+/* Find any node (tip, or clade by leaf-set/explicit label) in the resolved
+ * tree, or NULL. */
+TreeNode   *resolution_find(const Resolution *r, const char *id);
+
 /* Rotate (reverse the children of) each clade named in `spec`, a ','/';'
  * separated list of clade identifiers (a leaf-set label like 'A_B', or an
  * explicit label). Tip entries are ignored (a note is added to warns); an

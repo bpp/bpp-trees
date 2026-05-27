@@ -99,3 +99,63 @@ char *control_replace_block(const char *text, const char *new_block,
     memcpy(out + s + blen, text + e, tlen - e + 1);   /* incl. NUL */
     return out;
 }
+
+/* Locate the migration statement (the 'migration = N' line plus its N rows). */
+static int find_migration(const char *t, size_t *start, size_t *end)
+{
+    size_t n = strlen(t), i = 0;
+    while (i < n) {
+        size_t j = i;
+        while (j < n && (t[j] == ' ' || t[j] == '\t')) j++;
+        if (strncmp(t + j, "migration", 9) == 0) {
+            char a = t[j + 9];
+            if (a == ' ' || a == '\t' || a == '=' || a == '\0') {
+                size_t p = j + 9;
+                while (p < n && (t[p] == ' ' || t[p] == '\t')) p++;
+                if (p < n && t[p] == '=') p++;
+                while (p < n && is_ws(t[p])) p++;
+                if (p >= n || t[p] < '0' || t[p] > '9') return 0;
+                int N = 0;
+                while (p < n && t[p] >= '0' && t[p] <= '9') N = N * 10 + (t[p++] - '0');
+                while (p < n && t[p] != '\n') p++;        /* end the 'migration' line */
+                if (p < n) p++;
+                for (int k = 0; k < N; k++) {             /* skip the N rows */
+                    while (p < n && t[p] != '\n') p++;
+                    if (p < n) p++;
+                }
+                *start = j; *end = p;
+                return 1;
+            }
+        }
+        while (i < n && t[i] != '\n') i++;
+        if (i < n) i++;
+    }
+    return 0;
+}
+
+char *control_replace_migration(const char *text, const char *mig_block)
+{
+    if (!mig_block) return xstrdup(text);
+    char *add = xasprintf("%s\n", mig_block);
+    size_t alen = strlen(add), tlen = strlen(text);
+    size_t s, e;
+    char *out;
+    if (find_migration(text, &s, &e)) {                 /* replace existing */
+        out = xmalloc(s + alen + (tlen - e) + 1);
+        memcpy(out, text, s);
+        memcpy(out + s, add, alen);
+        memcpy(out + s + alen, text + e, tlen - e + 1);
+    } else if (find_species_tree(text, &s, &e)) {        /* insert after species&tree */
+        size_t ins = e;
+        while (ins < tlen && text[ins] != '\n') ins++;
+        if (ins < tlen) ins++;
+        out = xmalloc(ins + alen + (tlen - ins) + 1);
+        memcpy(out, text, ins);
+        memcpy(out + ins, add, alen);
+        memcpy(out + ins + alen, text + ins, tlen - ins + 1);
+    } else {
+        out = xasprintf("%s%s", text, add);
+    }
+    free(add);
+    return out;
+}

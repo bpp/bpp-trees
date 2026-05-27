@@ -9,6 +9,7 @@
 #include "util.h"
 #include "imap.h"
 #include "block.h"
+#include "migrate.h"
 #include "lineedit.h"
 
 #include <ctype.h>
@@ -27,10 +28,11 @@ typedef enum { OP_JOIN, OP_MOVE, OP_ROTATE, OP_GRAFT, OP_PRUNE } OpKind;
 typedef struct { OpKind kind; char *spec; } Op;
 
 typedef struct {
-    char *name;
-    Op   *ops;
-    int   n_ops, cap;
-    char *imap_path;     /* attached Imap file, or NULL */
+    char   *name;
+    Op     *ops;
+    int     n_ops, cap;
+    char   *imap_path;   /* attached Imap file, or NULL */
+    MigList mig;         /* migration bands */
 } NamedTree;
 
 typedef struct {
@@ -47,6 +49,7 @@ static void tree_init(NamedTree *t, const char *name)
     t->ops = NULL;
     t->n_ops = t->cap = 0;
     t->imap_path = NULL;
+    miglist_init(&t->mig);
 }
 
 static void tree_add_op(NamedTree *t, OpKind kind, const char *spec)
@@ -66,6 +69,7 @@ static void tree_free(NamedTree *t)
     free(t->ops);
     free(t->name);
     free(t->imap_path);
+    miglist_free(&t->mig);
 }
 
 static void tree_copy(NamedTree *dst, const NamedTree *src, const char *name)
@@ -74,6 +78,7 @@ static void tree_copy(NamedTree *dst, const NamedTree *src, const char *name)
     for (int i = 0; i < src->n_ops; i++)
         tree_add_op(dst, src->ops[i].kind, src->ops[i].spec);
     if (src->imap_path) dst->imap_path = xstrdup(src->imap_path);
+    miglist_copy(&dst->mig, &src->mig);
 }
 
 /* Build the resolved tree from the op list: accumulate all joins, resolve,
@@ -191,7 +196,15 @@ static void cmd_display(const NamedTree *t, int ascii)
     Resolution *r = tree_build(t, &joins, &errs, &warns);
 
     if (r->root) {
+        DiagList me; diag_init(&me);
+        miglist_apply(&t->mig, r, &me);          /* annotate nodes; collect errors */
         treenode_display(r->root, stdout, ascii, "");
+        if (t->mig.count) {
+            printf("\n");
+            migration_legend(&t->mig, r, stdout, treenode_use_color(ascii, stdout));
+        }
+        print_diags(&me, "error");               /* any invalid bands */
+        diag_free(&me);
     } else {
         print_diags(&errs, "error");
         printf("(tree is incomplete — nothing to display yet)\n");
@@ -259,6 +272,10 @@ static void cmd_block(const NamedTree *t, const char *arg)
         resolution_free(r); joinlist_free(&joins); diag_free(&errs); diag_free(&warns);
         return;
     }
+    /* apply migration before the Newick so clade endpoints get labelled */
+    DiagList me; diag_init(&me);
+    int migok = miglist_apply(&t->mig, r, &me);
+
     TreeNode **taxa = NULL; int nt = 0, tc = 0;
     treenode_collect_leaves(r->root, &taxa, &nt, &tc);
     char *body = treenode_to_newick(r->root);
@@ -274,11 +291,14 @@ static void cmd_block(const NamedTree *t, const char *arg)
     }
     int filled = 0, *counts = NULL;
     char *block = species_block(taxa, nt, nwk, m, &filled, &counts);
+    char *migblk = (migok && t->mig.count) ? migration_block(&t->mig, r) : NULL;
 
     while (*arg == ' ' || *arg == '\t') arg++;
 
     if (*arg == '\0') {                                 /* print to stdout */
         printf("%s\n", block);
+        if (migblk) printf("\n%s\n", migblk);
+        print_diags(&me, "error");                      /* invalid bands, if any */
         if (!filled) {
             if (!t->imap_path)
                 printf("(counts are '?'; attach an Imap with 'imap FILE')\n");
@@ -305,13 +325,16 @@ static void cmd_block(const NamedTree *t, const char *arg)
                 if (!outc) {
                     printf("%s\n", err);
                 } else {
+                    char *outm = control_replace_migration(outc, migblk);
+                    free(outc); outc = outm;
                     char *bak = xasprintf("%s.bak", file);
                     FILE *fb = fopen(bak, "w");
                     if (fb) { fputs(txt, fb); fclose(fb); }
                     FILE *fo = fopen(file, "w");
                     if (!fo) { printf("cannot write '%s'\n", file); }
                     else { fputs(outc, fo); fclose(fo);
-                           printf("replaced species&tree in '%s' (backup: %s)\n", file, bak); }
+                           printf("replaced species&tree%s in '%s' (backup: %s)\n",
+                                  migblk ? " and migration" : "", file, bak); }
                     free(bak); free(outc);
                 }
                 free(txt);
@@ -322,12 +345,15 @@ static void cmd_block(const NamedTree *t, const char *arg)
         char *file = expand_tilde(arg);
         FILE *fo = fopen(file, "w");
         if (!fo) printf("cannot write '%s'\n", file);
-        else { fprintf(fo, "%s\n", block); fclose(fo);
+        else { fprintf(fo, "%s\n", block);
+               if (migblk) fprintf(fo, "\n%s\n", migblk);
+               fclose(fo);
                printf("wrote species&tree block to '%s'\n", file); }
         free(file);
     }
 
-    free(taxa); free(nwk); free(block); free(counts); imap_free(m);
+    free(taxa); free(nwk); free(block); free(counts); free(migblk); imap_free(m);
+    diag_free(&me);
     resolution_free(r); joinlist_free(&joins); diag_free(&errs); diag_free(&warns);
 }
 
@@ -400,6 +426,8 @@ static void print_help(void)
 "  block [FILE]       print the species&tree block (to stdout, or write to FILE)\n"
 "  block replace FILE replace the species&tree block in a BPP control file\n"
 "  imap [FILE]        attach an Imap file (no arg: show; 'clear': detach)\n"
+"  migration SRC->DST add an MSC-M migration band (no arg: list; 'clear';\n"
+"                     'rm N': remove band N)\n"
 "  status             taxa count, completeness, and any guidance\n"
 "  taxa               list the tree's tips and the attached imap's species\n"
 "  history            list the commands entered this session\n"
@@ -479,6 +507,56 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
         free(t->imap_path); t->imap_path = full;   /* store the expanded path */
         printf("imap attached to '%s': %s (%d species)\n", t->name, full, m->count);
         imap_free(m); diag_free(&ie);
+        return;
+    }
+    if (IS("migration") || IS("mig")) {
+        NamedTree *t = ws_active(ws);
+        if (!*arg) {                                   /* list */
+            if (t->mig.count == 0) { printf("(no migration bands)\n"); return; }
+            DiagList e, w; JoinList j; diag_init(&e); diag_init(&w);
+            Resolution *r = tree_build(t, &j, &e, &w);
+            migration_legend(&t->mig, r, stdout, treenode_use_color(0, stdout));
+            resolution_free(r); joinlist_free(&j); diag_free(&e); diag_free(&w);
+            return;
+        }
+        if (strcmp(arg, "clear") == 0) {
+            miglist_free(&t->mig);
+            printf("migration bands cleared\n");
+            return;
+        }
+        if (strncmp(arg, "rm", 2) == 0 && (arg[2] == ' ' || arg[2] == '\t')) {
+            int idx = atoi(arg + 2);
+            if (idx < 1 || idx > t->mig.count) { printf("no migration band %d\n", idx); return; }
+            miglist_remove(&t->mig, idx - 1);
+            printf("removed migration band %d\n", idx);
+            return;
+        }
+        /* add SRC->DST, validated against the current tree */
+        MigList tmp; miglist_init(&tmp);
+        DiagList pe; diag_init(&pe);
+        miglist_parse(&tmp, arg, &pe);
+        if (pe.count || tmp.count != 1) {
+            if (pe.count) print_diags(&pe, "error");
+            else printf("usage: migration SRC->DST\n");
+        } else {
+            DiagList e, w, me; JoinList j;
+            diag_init(&e); diag_init(&w); diag_init(&me);
+            Resolution *r = tree_build(t, &j, &e, &w);
+            if (!r->root) {
+                printf("the active tree isn't complete yet — finish it first\n");
+            } else if (miglist_find(&t->mig, tmp.items[0].src, tmp.items[0].dst) >= 0) {
+                printf("that migration band already exists\n");
+            } else if (!miglist_apply(&tmp, r, &me)) {
+                print_diags(&me, "error");
+            } else {
+                miglist_add(&t->mig, tmp.items[0].src, tmp.items[0].dst);
+                printf("added migration M%d: %s \xe2\x86\x92 %s\n",
+                       t->mig.count, tmp.items[0].src, tmp.items[0].dst);
+            }
+            resolution_free(r); joinlist_free(&j);
+            diag_free(&e); diag_free(&w); diag_free(&me);
+        }
+        miglist_free(&tmp); diag_free(&pe);
         return;
     }
     if (IS("display") || IS("show") || IS("d")) {
@@ -597,9 +675,9 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
 /* --- tab completion ----------------------------------------------------- */
 
 static const char *const COMMANDS[] = {
-    "help", "quit", "exit", "display", "newick", "block", "imap", "taxa",
-    "status", "trees", "history", "save", "use", "new", "drop", "move", "graft",
-    "prune", "remove", "rotate",
+    "help", "quit", "exit", "display", "newick", "block", "imap", "migration",
+    "taxa", "status", "trees", "history", "save", "use", "new", "drop", "move",
+    "graft", "prune", "remove", "rotate",
     NULL
 };
 

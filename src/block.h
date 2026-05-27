@@ -21,4 +21,10 @@ char *species_block(TreeNode **taxa, int n_taxa, const char *newick,
 char *control_replace_block(const char *text, const char *new_block,
                             const char **errmsg);
 
+/* Return a copy of `text` with its `migration` statement replaced by
+ * `mig_block` (the 'migration = N' + rows), inserted after the species&tree
+ * block if none exists. If `mig_block` is NULL the text is returned unchanged.
+ * Caller frees. */
+char *control_replace_migration(const char *text, const char *mig_block);
+
 #endif /* BPP_TREE_BLOCK_H */

@@ -24,8 +24,9 @@ Note: replace '?' with the number of sequences per species from your Imap file.
 This is **Phase 1: binary trees only**. It covers the full pipeline —
 parsing, order-independent resolution, validation, the `species&tree` block,
 Imap count-filling, and JSON output — but **rejects polytomies** (joins with
-more than two operands) with a clear error. Polytomy support, migration, and
-introgression are planned for later phases.
+more than two operands) with a clear error. It also supports **MSC-M migration
+bands** (see below). Polytomy support and MSC-I introgression are planned for
+later phases.
 
 ## Build
 
@@ -114,6 +115,7 @@ bpp-tree [options] [JOINS_FILE]
 | `--move LIST` | Prune-and-regraft moves `SRC->DST` (see below) |
 | `--graft LIST` | Add new tips `NEW->DST` (see below) |
 | `--prune LIST` | Remove tips/subtrees (see below) |
+| `--migration LIST` | MSC-M migration bands `SRC->DST` (see below) |
 | `--rotate LIST` | Reverse the children of each named clade (see below) |
 | `--out PREFIX` | Write `PREFIX.nwk` and `PREFIX.stree` |
 | `--newick-only` | Print only the Newick string |
@@ -213,6 +215,41 @@ Removing the root (the whole tree) is an error. Note that `prune` removes a
 clade *from* the tree, whereas the interactive `drop` deletes a whole *tree*
 from the workspace.
 
+### Migration bands (MSC-M)
+
+`--migration 'SRC->DST'` (interactive: `migration SRC->DST`) adds an MSC-M
+migration band — gene flow from branch `SRC` to branch `DST`. Endpoints are
+branches (tips or clades, named as usual), and the band is **directional**.
+A band is valid only between two **non-nested, contemporaneous** branches:
+source ≠ target, and neither may be the other's ancestor or descendant (those
+don't coexist in time). Invalid bands are reported and excluded from output.
+The diagram marks the endpoints (`M1→` source, `→M1` destination), colourised
+by band on a colour terminal, with a legend:
+
+```
+$ bpp-tree --display --joins 'A+B,C+D,A_B+C_D' --migration 'A->C, C->B'
+Tree:
+  ┬ A_B_C_D
+  ├─┬ A_B
+  │ ├── A M1→
+  │ └── B →M2
+  └─┬ C_D
+    ├── C →M1 M2→
+    └── D
+
+  migration bands:
+    M1:  A → C
+    M2:  C → B
+```
+
+The BPP `migration = N` block is emitted alongside `species&tree` (by the CLI
+human output, `--out`, JSON, and the interactive `block` / `block replace`).
+A clade endpoint is given an internal label in the Newick (e.g. `((A,B)A_B,…)`)
+so BPP can reference the ancestral population. Migration is only valid between
+branches that overlap in time — this is a topology-only tool (no divergence
+times), so temporal overlap is left to BPP/`bpp-lint` to check. (BPP also
+requires `wprior` and `speciestree = 0` when migration is set.)
+
 ### Rotating nodes
 
 `--rotate` reverses the child order of one or more clades — it changes the
@@ -273,6 +310,7 @@ bpp-tree> quit
 | `undo` | undo the last change to the active tree |
 | `display [ascii]` / `newick` / `status` | view the active tree |
 | `imap FILE` | attach an Imap to the active tree (no arg: show; `clear`: detach) |
+| `migration SRC->DST` | add an MSC-M migration band (no arg: list; `clear`; `rm N`) |
 | `taxa` | list the tree's tips and the attached imap's species |
 | `block [FILE]` | print the `species&tree` block (stdout, or write to `FILE`) |
 | `block replace FILE` | replace the `species&tree` block inside a BPP control file |

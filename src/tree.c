@@ -3,6 +3,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 TreeNode *treenode_leaf(const char *name)
 {
@@ -31,6 +32,32 @@ void treenode_add_child(TreeNode *parent, TreeNode *child)
                                 (size_t)(parent->n_children + 1) * sizeof(TreeNode *));
     parent->children[parent->n_children++] = child;
     child->parent = parent;
+}
+
+void treenode_add_mig(TreeNode *node, int signed_band)
+{
+    node->mig = xrealloc(node->mig, (size_t)(node->n_mig + 1) * sizeof(int));
+    node->mig[node->n_mig++] = signed_band;
+}
+
+const char *treenode_bpp_name(const TreeNode *node)
+{
+    if (node->is_leaf) return node->name;
+    return node->explicit_label ? node->explicit_label : node->implicit_label;
+}
+
+const char *treenode_mig_color(int k)
+{
+    static const char *const pal[] = {
+        "\x1b[36m", "\x1b[35m", "\x1b[33m", "\x1b[32m", "\x1b[31m", "\x1b[34m",
+    };
+    if (k < 1) k = 1;
+    return pal[(k - 1) % 6];
+}
+
+int treenode_use_color(int ascii, FILE *fp)
+{
+    return !ascii && isatty(fileno(fp)) && getenv("NO_COLOR") == NULL;
 }
 
 void treenode_add_ref(TreeNode *node, int line)
@@ -114,9 +141,23 @@ static const char *display_label(const TreeNode *n)
     return n->explicit_label ? n->explicit_label : n->implicit_label;
 }
 
+/* Append migration markers ("M1→" for source, "→M1" for dest) after a label. */
+static void display_mig(const TreeNode *n, FILE *fp, int color)
+{
+    for (int i = 0; i < n->n_mig; i++) {
+        int s = n->mig[i];
+        int k = s < 0 ? -s : s;
+        fputc(' ', fp);
+        if (color) fputs(treenode_mig_color(k), fp);
+        if (s > 0) fprintf(fp, "M%d→", k);     /* source: M1→ */
+        else       fprintf(fp, "→M%d", k);     /* dest:   →M1 */
+        if (color) fputs(TREENODE_MIG_RESET, fp);
+    }
+}
+
 static void display_rec(const TreeNode *n, const char *prefix, int is_last,
                         int is_root, FILE *fp, const DisplayGlyphs *g,
-                        const char *lead)
+                        const char *lead, int color)
 {
     fputs(lead, fp);
     if (is_root) {
@@ -128,6 +169,7 @@ static void display_rec(const TreeNode *n, const char *prefix, int is_last,
     }
     fputc(' ', fp);
     fputs(display_label(n), fp);
+    display_mig(n, fp, color);
     fputc('\n', fp);
 
     if (n->is_leaf) return;
@@ -135,7 +177,7 @@ static void display_rec(const TreeNode *n, const char *prefix, int is_last,
     char *cp = is_root ? xstrdup(prefix)
                        : xasprintf("%s%s", prefix, is_last ? g->gap : g->vbar);
     for (int i = 0; i < n->n_children; i++)
-        display_rec(n->children[i], cp, i == n->n_children - 1, 0, fp, g, lead);
+        display_rec(n->children[i], cp, i == n->n_children - 1, 0, fp, g, lead, color);
     free(cp);
 }
 
@@ -144,7 +186,8 @@ void treenode_display(const TreeNode *root, FILE *fp, int ascii, const char *lea
     static const DisplayGlyphs uni = { "│ ", "  ", "├─", "└─", "┬", "─" };
     static const DisplayGlyphs asc = { "| ", "  ", "|-", "`-", "+", "-" };
     if (!root) return;
-    display_rec(root, "", 1, 1, fp, ascii ? &asc : &uni, lead ? lead : "");
+    display_rec(root, "", 1, 1, fp, ascii ? &asc : &uni, lead ? lead : "",
+                treenode_use_color(ascii, fp));
 }
 
 void treenode_recompute(TreeNode *node)
@@ -167,6 +210,7 @@ void treenode_free(TreeNode *node)
     for (int i = 0; i < node->n_leaf_names; i++) free(node->leaf_names[i]);
     free(node->leaf_names);
     free(node->ref_lines);
+    free(node->mig);
     free(node);
 }
 
@@ -193,6 +237,10 @@ static char *newick_rec(const TreeNode *node, char *buf, size_t *len, size_t *ca
         buf = newick_rec(node->children[i], buf, len, cap);
     }
     buf = str_append(buf, len, cap, ")");
+    /* label an internal node when something references it (e.g. a migration
+     * band needs an ancestral population to be named). */
+    if (node->show_label)
+        buf = str_append(buf, len, cap, treenode_bpp_name(node));
     return buf;
 }
 

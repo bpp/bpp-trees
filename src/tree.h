@@ -20,6 +20,10 @@ typedef struct TreeNode {
     int             *ref_lines;      /* source lines of joins referencing this node */
     int              n_refs;
     int              ref_cap;
+
+    int             *mig;            /* migration marks: +k source / -k dest of band k */
+    int              n_mig;
+    int              show_label;     /* emit this internal node's label in Newick */
 } TreeNode;
 
 TreeNode *treenode_leaf(const char *name);
@@ -56,6 +60,21 @@ int       treenode_count_internal(const TreeNode *node);
 /* Reverse the order of a node's children (a no-op for leaves). Changes the
  * Newick string but not the topology. */
 void      treenode_rotate(TreeNode *node);
+
+/* Record a migration mark on a node: +k if it is the source of band k, -k if
+ * the destination (k >= 1). Shown after the label by treenode_display. */
+void      treenode_add_mig(TreeNode *node, int signed_band);
+
+/* The node's BPP population name: a tip's name, or a clade's explicit label
+ * (falling back to its implicit leaf-set label). */
+const char *treenode_bpp_name(const TreeNode *node);
+
+/* ANSI colour escape for migration band k (k >= 1), and the reset code. */
+const char *treenode_mig_color(int k);
+#define TREENODE_MIG_RESET "\x1b[0m"
+
+/* Whether to colourise output: not ASCII mode, fp is a TTY, NO_COLOR unset. */
+int       treenode_use_color(int ascii, FILE *fp);
 
 /* Print the subtree as an indented, root-at-left branching diagram. Each line
  * is prefixed with `lead`. Tips show their name; internal nodes show their

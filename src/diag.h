@@ -29,6 +29,9 @@
 /* prune: remove a tip or subtree from the tree. */
 #define DIAG_PRUNE_UNKNOWN          "PRUNE_UNKNOWN"
 #define DIAG_PRUNE_INVALID          "PRUNE_INVALID"
+/* migration (MSC-M) bands. */
+#define DIAG_MIGRATION_UNKNOWN      "MIGRATION_UNKNOWN"
+#define DIAG_MIGRATION_INVALID      "MIGRATION_INVALID"
 #define DIAG_EMPTY_FILE             "EMPTY_FILE"
 #define DIAG_SINGLE_TAXON_TREE      "SINGLE_TAXON_TREE"
 #define DIAG_SYNTAX                 "SYNTAX"
@@ -41,6 +44,7 @@
 #define DIAG_ROOT_AUTO_JOINED       "ROOT_AUTO_JOINED"
 #define DIAG_ROTATE_IGNORED_TIP     "ROTATE_IGNORED_TIP"
 #define DIAG_MOVE_NOOP              "MOVE_NOOP"
+#define DIAG_MIGRATION_NOOP         "MIGRATION_NOOP"
 #define DIAG_LARGE_TREE             "LARGE_TREE"
 #define DIAG_UNUSED_LABEL           "UNUSED_LABEL"
 
