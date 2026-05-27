@@ -61,8 +61,31 @@ static void buf_set(char *buf, size_t *pos, size_t *len, const char *s)
     *len = *pos = strlen(buf);
 }
 
+static int is_token_char(int c)
+{
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+        || (c >= '0' && c <= '9') || c == '_' || c == '-';
+}
+
+/* Replace the word [wstart,*pos) with `full`, optionally adding a space. */
+static void apply_completion(char *buf, size_t *pos, size_t *len,
+                             int wstart, const char *full, int add_space)
+{
+    size_t flen = strlen(full);
+    size_t tail = *len - *pos;
+    size_t add = flen + (add_space ? 1 : 0);
+    if ((size_t)wstart + add + tail >= LE_MAX) return;   /* would overflow */
+    memmove(buf + wstart + add, buf + *pos, tail);
+    memcpy(buf + wstart, full, flen);
+    if (add_space) buf[wstart + flen] = ' ';
+    *len = (size_t)wstart + add + tail;
+    *pos = (size_t)wstart + add;
+    buf[*len] = '\0';
+}
+
 /* The interactive edit loop (terminal already in raw mode). */
-static char *edit_raw(const char *prompt, History *h)
+static char *edit_raw(const char *prompt, History *h,
+                      le_complete_fn complete, void *ctx)
 {
     char buf[LE_MAX] = {0};
     char stash[LE_MAX] = {0};   /* the in-progress line, saved while browsing history */
@@ -92,6 +115,37 @@ static char *edit_raw(const char *prompt, History *h)
         } else if (c == 6) {  if (pos < len) pos++;    /* Ctrl-F */
         } else if (c == 21) { buf[0] = '\0'; pos = len = 0;   /* Ctrl-U */
         } else if (c == 11) { buf[pos] = '\0'; len = pos;     /* Ctrl-K: kill to end */
+        } else if (c == 9) {            /* Tab: completion */
+            if (complete) {
+                int wstart = (int)pos;
+                while (wstart > 0 && is_token_char((unsigned char)buf[wstart - 1])) wstart--;
+                char **cand = NULL;
+                int nc = complete(buf, wstart, (int)pos, &cand, ctx);
+                if (nc == 1) {
+                    apply_completion(buf, &pos, &len, wstart, cand[0], 1);
+                } else if (nc > 1) {
+                    size_t lcp = strlen(cand[0]);          /* longest common prefix */
+                    for (int i = 1; i < nc; i++) {
+                        size_t j = 0;
+                        while (j < lcp && cand[i][j] == cand[0][j]) j++;
+                        lcp = j;
+                    }
+                    if (lcp > pos - (size_t)wstart) {
+                        char *pref = xstrndup(cand[0], lcp);
+                        apply_completion(buf, &pos, &len, wstart, pref, 0);
+                        free(pref);
+                    } else {                               /* list the candidates */
+                        write(STDOUT_FILENO, "\n", 1);
+                        for (int i = 0; i < nc; i++) {
+                            write(STDOUT_FILENO, cand[i], strlen(cand[i]));
+                            write(STDOUT_FILENO, "  ", 2);
+                        }
+                        write(STDOUT_FILENO, "\n", 1);
+                    }
+                }
+                for (int i = 0; i < nc; i++) free(cand[i]);
+                free(cand);
+            }
         } else if (c == 27) {           /* escape sequence */
             char a, b;
             if (read(STDIN_FILENO, &a, 1) <= 0) continue;
@@ -130,7 +184,7 @@ static char *edit_raw(const char *prompt, History *h)
     }
 }
 
-char *line_edit(const char *prompt, History *h)
+char *line_edit(const char *prompt, History *h, le_complete_fn complete, void *ctx)
 {
     if (!isatty(STDIN_FILENO)) return read_cooked();
 
@@ -144,7 +198,7 @@ char *line_edit(const char *prompt, History *h)
     if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) < 0) return read_cooked();
 
     fflush(stdout);
-    char *res = edit_raw(prompt, h);
+    char *res = edit_raw(prompt, h, complete, ctx);
     tcsetattr(STDIN_FILENO, TCSANOW, &orig);
     return res;
 }

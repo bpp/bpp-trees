@@ -296,15 +296,20 @@ def session(keys):
     except OSError: pass
     os.waitpid(pid, 0)
     return out.decode(errors="replace")
-UP, CR, BS = b"\x1b[A", b"\r", b"\x7f"
+UP, CR, BS, TAB = b"\x1b[A", b"\r", b"\x7f", b"\t"
 # Up recalls the previous command and re-runs it
 o1 = session([b"A+B"+CR, b"newick"+CR, UP, CR, b"quit"+CR])
 # recall 'newick', edit it (delete, retype 'trees') -> runs 'trees', not newick
 o2 = session([b"A+B"+CR, b"newick"+CR, UP, BS*6, b"trees"+CR, b"quit"+CR])
-ok = o1.count("(A,B);") >= 2 and ("main" in o2) and o2.count("(A,B);") == 1
+# Tab completes a command: 'disp' -> 'display' (prints the diagram, with U+252C)
+o3 = session([b"A+B"+CR, b"C+D"+CR, b"disp"+TAB, CR, b"quit"+CR])
+# Tab completes a clade name: 'C_' -> 'C_D', then prune leaves (A,B)
+o4 = session([b"A+B"+CR, b"C+D"+CR, b"prune C_"+TAB, CR, b"newick"+CR, b"quit"+CR])
+ok = (o1.count("(A,B);") >= 2 and ("main" in o2) and o2.count("(A,B);") == 1
+      and "┬" in o3 and "(A,B);" in o4)
 sys.exit(0 if ok else 1)
 PY
-    then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL te1: PTY line-editor recall/edit"; fi
+    then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL te1: PTY line-editor recall/edit/completion"; fi
 else
     echo "skip te1: python3 not found (PTY line-editor test)"
 fi

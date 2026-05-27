@@ -228,7 +228,9 @@ added to it, and `move`/`rotate` edit it — all changes are kept in memory.
 
 At a terminal you can recall previous commands with the **up/down arrows** and
 edit them inline (←/→, Home/End, backspace) before running — handy for fixing a
-typo or tweaking a `move`/`graft`. `history` lists the commands you've entered.
+typo or tweaking a `move`/`graft`. **Tab** completes command names (at the start
+of a line) and clade/tip names of the active tree (as arguments); a second
+ambiguous Tab lists the candidates. `history` lists the commands you've entered.
 
 ```
 $ bpp-tree -i

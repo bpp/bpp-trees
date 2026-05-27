@@ -409,6 +409,68 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
     joinlist_free(&tmp); diag_free(&terr);
 }
 
+/* --- tab completion ----------------------------------------------------- */
+
+static const char *const COMMANDS[] = {
+    "help", "quit", "exit", "display", "newick", "status", "trees", "history",
+    "save", "use", "new", "drop", "move", "graft", "prune", "remove", "rotate",
+    NULL
+};
+
+static void add_cand(char ***arr, int *n, int *cap, const char *s)
+{
+    for (int i = 0; i < *n; i++) if (strcmp((*arr)[i], s) == 0) return;  /* dedup */
+    if (*n == *cap) { *cap = *cap ? *cap * 2 : 16; *arr = xrealloc(*arr, (size_t)*cap * sizeof(char *)); }
+    (*arr)[(*n)++] = xstrdup(s);
+}
+
+/* clade/tip identifiers in the current tree: tip names, and each internal
+ * node's implicit (leaf-set) label and explicit label. */
+static void collect_nodes(const TreeNode *nd, char ***arr, int *n, int *cap)
+{
+    if (!nd) return;
+    if (nd->is_leaf) { add_cand(arr, n, cap, nd->name); return; }
+    add_cand(arr, n, cap, nd->implicit_label);
+    if (nd->explicit_label) add_cand(arr, n, cap, nd->explicit_label);
+    for (int i = 0; i < nd->n_children; i++) collect_nodes(nd->children[i], arr, n, cap);
+}
+
+static int repl_complete(const char *buf, int wstart, int wend, char ***out, void *ctx)
+{
+    Workspace *ws = ctx;
+    int is_cmd = 1;
+    for (int i = 0; i < wstart; i++)
+        if (!isspace((unsigned char)buf[i])) { is_cmd = 0; break; }
+
+    char **all = NULL; int n = 0, cap = 0;
+    if (is_cmd) {
+        for (int i = 0; COMMANDS[i]; i++) add_cand(&all, &n, &cap, COMMANDS[i]);
+    } else {
+        NamedTree *t = ws_active(ws);
+        DiagList e, w; JoinList j;
+        diag_init(&e); diag_init(&w);
+        Resolution *r = tree_build(t, &j, &e, &w);
+        if (r->root) collect_nodes(r->root, &all, &n, &cap);
+        else for (int i = 0; i < r->n_leaves; i++) add_cand(&all, &n, &cap, r->leaves[i]->name);
+        resolution_free(r); joinlist_free(&j); diag_free(&e); diag_free(&w);
+    }
+
+    int wlen = wend - wstart;
+    const char *word = buf + wstart;
+    char **match = NULL; int m = 0, mc = 0;
+    for (int i = 0; i < n; i++) {
+        if ((int)strlen(all[i]) >= wlen && strncmp(all[i], word, (size_t)wlen) == 0) {
+            if (m == mc) { mc = mc ? mc * 2 : 8; match = xrealloc(match, (size_t)mc * sizeof(char *)); }
+            match[m++] = all[i];                 /* transfer ownership */
+        } else {
+            free(all[i]);
+        }
+    }
+    free(all);
+    *out = match;
+    return m;
+}
+
 /* --- entry point -------------------------------------------------------- */
 
 int repl_run(const char *seed_joins)
@@ -423,14 +485,15 @@ int repl_run(const char *seed_joins)
     int tty = isatty(STDIN_FILENO);
     if (tty)
         fputs("bpp-tree interactive mode. Type 'help' for commands, 'quit' to exit.\n"
-              "Use the up/down arrows to recall and edit previous commands.\n",
+              "Up/down arrows recall previous commands; Tab completes commands "
+              "and clade names.\n",
               stdout);
     if (seed_joins && *seed_joins) show_status(ws_active(&ws));
 
     History hist = {0};
     int quit = 0;
     char *line;
-    while (!quit && (line = line_edit("bpp-tree> ", &hist)) != NULL) {
+    while (!quit && (line = line_edit("bpp-tree> ", &hist, repl_complete, &ws)) != NULL) {
         char *s = line;
         while (*s == ' ' || *s == '\t') s++;
         if (*s != '\0' && *s != '#') {
