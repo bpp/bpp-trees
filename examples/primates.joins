@@ -1,0 +1,17 @@
+# Great apes + outgroup, using explicit clade labels.
+# Build with:  bpp-tree examples/primates.joins
+
+# great apes
+chimp+bonobo          = pan
+pan+human             = hominini
+gorilla+hominini      = homininae
+orang+homininae       = hominidae
+
+# lesser apes
+gibbon+siamang        = hylobatidae
+
+# all apes
+hominidae+hylobatidae = apes
+
+# macaque outgroup
+macaque+apes

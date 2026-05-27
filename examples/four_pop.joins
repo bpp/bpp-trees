@@ -1,0 +1,12 @@
+# Four-population tree with the bpp-seqs realdata topology:
+#   (AFR,(EUR,(EAS,AMR)))   — AFR outgroup, (EAS,AMR) sister, EUR next.
+#
+# Build (fill individual counts from the Imap):
+#   bpp-tree --imap tests/fixtures/samples.imap examples/four_pop.joins
+#
+# Two lines: the EAS_AMR pair is auto-created, and the {EAS,AMR,EUR} clade is
+# referenced by its members. The printed Newick is an equivalent rotation of
+# the fixture string (same species tree).
+
+EAS_AMR + EUR        # ((EAS,AMR),EUR)
+EAS_AMR_EUR + AFR    # join with the AFR outgroup

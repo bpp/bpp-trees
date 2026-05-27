@@ -1,0 +1,11 @@
+# build artifacts
+/bpp-tree
+*.o
+*.dSYM/
+
+# generated output
+*.nwk
+*.stree
+
+# the original starter bundle
+bpp-tree-claude-code.tar.gz
