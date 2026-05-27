@@ -18,7 +18,7 @@
 /* A tree is stored as the operations that build it: joins (declarative, an
  * order-free set) plus moves/rotations (applied in order afterwards). The
  * resolved tree is recomputed on demand. */
-typedef enum { OP_JOIN, OP_MOVE, OP_ROTATE, OP_GRAFT } OpKind;
+typedef enum { OP_JOIN, OP_MOVE, OP_ROTATE, OP_GRAFT, OP_PRUNE } OpKind;
 
 typedef struct { OpKind kind; char *spec; } Op;
 
@@ -88,6 +88,7 @@ static Resolution *tree_build(const NamedTree *t, JoinList *joins,
             if (t->ops[i].kind == OP_MOVE)        resolution_move(r, t->ops[i].spec, errs, warns);
             else if (t->ops[i].kind == OP_ROTATE) resolution_rotate(r, t->ops[i].spec, errs, warns);
             else if (t->ops[i].kind == OP_GRAFT)  resolution_graft(r, t->ops[i].spec, errs, warns);
+            else if (t->ops[i].kind == OP_PRUNE)  resolution_prune(r, t->ops[i].spec, errs, warns);
             if (errs->count) break;
         }
     }
@@ -162,7 +163,8 @@ static void try_transform(NamedTree *t, OpKind kind, const char *spec)
         DiagList te; diag_init(&te);
         if      (kind == OP_MOVE)   resolution_move(r, spec, &te, &warns);
         else if (kind == OP_ROTATE) resolution_rotate(r, spec, &te, &warns);
-        else                        resolution_graft(r, spec, &te, &warns);
+        else if (kind == OP_GRAFT)  resolution_graft(r, spec, &te, &warns);
+        else                        resolution_prune(r, spec, &te, &warns);
         if (te.count == 0) ok = 1;
         else { print_diags(&te, "error"); printf("(not applied)\n"); }
         diag_free(&te);
@@ -232,6 +234,7 @@ static void print_help(void)
 "  A+B [= label]      add a join ('+' to join; ',' or ';' separate several)\n"
 "  move SRC -> DST    prune clade SRC and regraft it as the sister of DST\n"
 "  graft NEW -> DST   add a new tip NEW as the sister of DST\n"
+"  prune LIST         remove tips/subtrees (also 'remove')\n"
 "  rotate LIST        reverse the children of the named clade(s)\n"
 "  undo               undo the last change to the active tree\n"
 "  display [ascii]    show the active tree as a branching diagram\n"
@@ -310,6 +313,11 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
     if (IS("graft") || IS("add")) {
         if (!*arg) { printf("usage: graft NEW -> TARGET\n"); return; }
         try_transform(ws_active(ws), OP_GRAFT, arg);
+        return;
+    }
+    if (IS("prune") || IS("remove") || IS("rm")) {
+        if (!*arg) { printf("usage: prune CLADE[,CLADE...]\n"); return; }
+        try_transform(ws_active(ws), OP_PRUNE, arg);
         return;
     }
     if (IS("undo")) {

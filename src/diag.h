@@ -26,6 +26,9 @@
 /* graft: add a new tip as the sister of an existing node. */
 #define DIAG_GRAFT_UNKNOWN          "GRAFT_UNKNOWN"
 #define DIAG_GRAFT_INVALID          "GRAFT_INVALID"
+/* prune: remove a tip or subtree from the tree. */
+#define DIAG_PRUNE_UNKNOWN          "PRUNE_UNKNOWN"
+#define DIAG_PRUNE_INVALID          "PRUNE_INVALID"
 #define DIAG_EMPTY_FILE             "EMPTY_FILE"
 #define DIAG_SINGLE_TAXON_TREE      "SINGLE_TAXON_TREE"
 #define DIAG_SYNTAX                 "SYNTAX"

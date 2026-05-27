@@ -66,4 +66,10 @@ void        resolution_move(Resolution *r, const char *spec,
 void        resolution_graft(Resolution *r, const char *spec,
                              DiagList *errs, DiagList *warns);
 
+/* Remove tips/subtrees. `spec` is a ','/';' separated list of clade or tip
+ * names; each is pruned and its now-unary parent is suppressed. Removing the
+ * root, or an unknown name, is an error in errs. */
+void        resolution_prune(Resolution *r, const char *spec,
+                             DiagList *errs, DiagList *warns);
+
 #endif /* BPP_TREE_RESOLVER_H */

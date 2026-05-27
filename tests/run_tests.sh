@@ -136,6 +136,13 @@ check tg2 '(((A,B),E),(C,D));'  --quiet --newick-only --joins 'A+B,C+D' --graft 
 has   tg3 'GRAFT_UNKNOWN'        --joins 'A+B,C+D' --graft 'E->ZZ'                          # bad target
 has   tg4 'GRAFT_INVALID'        --joins 'A+B,C+D' --graft 'A->C'                           # tip already present
 
+# --- Prune (remove a tip or subtree) -------------------------------------
+check tp1 '(B,(C,D));'          --quiet --newick-only --joins 'A+B,C+D' --prune 'A'        # remove a tip
+check tp2 '(C,D);'              --quiet --newick-only --joins 'A+B,C+D' --prune 'A_B'      # remove a subtree
+check tp3 'B;'                  --quiet --newick-only --joins 'A+B' --prune 'A'            # down to one tip
+has   tp4 'PRUNE_UNKNOWN'        --joins 'A+B,C+D' --prune 'ZZ'                             # not in tree
+has   tp5 'PRUNE_INVALID'        --joins 'A+B,C+D' --prune 'A_B_C_D'                        # the root
+
 # --- Tree display --------------------------------------------------------
 DSP='--quiet --display --joins A+B,C+D'
 has td1 '├─┬ A_B'    $DSP                                    # ancestor label (implicit)
@@ -259,6 +266,11 @@ chk_contains ti11 "$s5" 'not applied'        # rejected, not committed
 s6="$(printf 'A+B\nprint\nfoo bar\nnewick\nquit\n' | "$BIN" -i 2>&1)"
 chk_contains ti12 "$s6" 'unknown command'
 chk_contains ti13 "$s6" '(A,B);'             # tree unchanged by junk input
+
+# prune (remove) a tip; a failed prune is reported but not committed
+s7="$(printf 'A+B\nC+D\nremove A\nnewick\nprune ZZ\nnewick\nquit\n' | "$BIN" -i 2>&1)"
+chk_contains ti14 "$s7" '(B,(C,D));'         # tip removed, parent suppressed
+chk_contains ti15 "$s7" 'PRUNE_UNKNOWN'      # bad target reported, not applied
 
 # --- Interactive line editor (PTY; requires python3) ---------------------
 if command -v python3 >/dev/null 2>&1; then

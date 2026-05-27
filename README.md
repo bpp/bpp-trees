@@ -113,6 +113,7 @@ bpp-tree [options] [JOINS_FILE]
 | `--ascii` | With `--display`, use ASCII connectors instead of Unicode |
 | `--move LIST` | Prune-and-regraft moves `SRC->DST` (see below) |
 | `--graft LIST` | Add new tips `NEW->DST` (see below) |
+| `--prune LIST` | Remove tips/subtrees (see below) |
 | `--rotate LIST` | Reverse the children of each named clade (see below) |
 | `--out PREFIX` | Write `PREFIX.nwk` and `PREFIX.stree` |
 | `--newick-only` | Print only the Newick string |
@@ -186,6 +187,21 @@ $ bpp-tree --quiet --newick-only --joins 'A+B,C+D' --graft 'E->D'   # ((A,B),(C,
 contain `_` (it's a species name). Like `move`/`rotate`, grafts are a
 command-line/interactive transform, not part of the order-free `.joins` file.
 
+### Removing tips and subtrees
+
+`--prune 'NAME'` (interactive: `prune`/`remove`) removes a tip or clade and
+suppresses its now-unary parent — the inverse of `graft`. Name tips or clades
+by leaf-set/explicit label, `,`/`;`-separated for several.
+
+```
+$ bpp-tree --quiet --newick-only --joins 'A+B,C+D' --prune 'A'     # (B,(C,D));
+$ bpp-tree --quiet --newick-only --joins 'A+B,C+D' --prune 'A_B'   # (C,D);
+```
+
+Removing the root (the whole tree) is an error. Note that `prune` removes a
+clade *from* the tree, whereas the interactive `drop` deletes a whole *tree*
+from the workspace.
+
 ### Rotating nodes
 
 `--rotate` reverses the child order of one or more clades — it changes the
@@ -236,6 +252,7 @@ bpp-tree> quit
 | `A+B` (any join) | add a join to the active tree |
 | `move SRC -> DST` | prune `SRC`, regraft as sister of `DST` |
 | `graft NEW -> DST` | add a new tip `NEW` as sister of `DST` |
+| `prune LIST` / `remove LIST` | remove tips/subtrees |
 | `rotate LIST` | reverse children of the named clade(s) |
 | `undo` | undo the last change to the active tree |
 | `display [ascii]` / `newick` / `status` | view the active tree |

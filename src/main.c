@@ -32,6 +32,7 @@ typedef struct {
     char *rotate_spec;    /* --rotate */
     char *move_spec;      /* --move */
     char *graft_spec;     /* --graft */
+    char *prune_spec;     /* --prune */
     char *joins_file;     /* positional */
 } Options;
 
@@ -201,6 +202,8 @@ static void usage(FILE *fp)
 "                        regraft it as the sister of DST.\n"
 "      --graft LIST      Add new tips 'NEW->DST' (',' or ';' separated): add\n"
 "                        a new tip NEW as the sister of DST.\n"
+"      --prune LIST      Remove tips/subtrees (',' or ';' separated clade or\n"
+"                        tip names); the parent is suppressed.\n"
 "      --rotate LIST     Reverse the children of each named clade (',' or ';'\n"
 "                        separated; a leaf-set label like 'A_B' or an explicit\n"
 "                        label). Tips are ignored. Changes order, not topology.\n"
@@ -219,7 +222,7 @@ int main(int argc, char **argv)
 
     enum { OPT_VERSION = 1000, OPT_JSON, OPT_INDENT, OPT_JOINS, OPT_IMAP,
            OPT_OUT, OPT_NEWICK, OPT_VALIDATE, OPT_QUIET, OPT_ROTATE, OPT_MOVE,
-           OPT_GRAFT, OPT_DISPLAY, OPT_ASCII };
+           OPT_GRAFT, OPT_PRUNE, OPT_DISPLAY, OPT_ASCII };
     static struct option lo[] = {
         {"help",        no_argument,       0, 'h'},
         {"interactive", no_argument,       0, 'i'},
@@ -232,6 +235,7 @@ int main(int argc, char **argv)
         {"out",         required_argument, 0, OPT_OUT},
         {"move",        required_argument, 0, OPT_MOVE},
         {"graft",       required_argument, 0, OPT_GRAFT},
+        {"prune",       required_argument, 0, OPT_PRUNE},
         {"rotate",      required_argument, 0, OPT_ROTATE},
         {"display",     no_argument,       0, OPT_DISPLAY},
         {"ascii",       no_argument,       0, OPT_ASCII},
@@ -254,6 +258,7 @@ int main(int argc, char **argv)
             case OPT_OUT:      o.out_prefix = optarg; break;
             case OPT_MOVE:     o.move_spec = optarg; break;
             case OPT_GRAFT:    o.graft_spec = optarg; break;
+            case OPT_PRUNE:    o.prune_spec = optarg; break;
             case OPT_ROTATE:   o.rotate_spec = optarg; break;
             case OPT_DISPLAY:  o.display = 1; break;
             case OPT_ASCII:    o.ascii = 1; break;
@@ -348,6 +353,8 @@ int main(int argc, char **argv)
             resolution_move(r, o.move_spec, &errs, &warns);
         if (o.graft_spec && !errs.count)
             resolution_graft(r, o.graft_spec, &errs, &warns);
+        if (o.prune_spec && !errs.count)
+            resolution_prune(r, o.prune_spec, &errs, &warns);
         if (o.rotate_spec && !errs.count)
             resolution_rotate(r, o.rotate_spec, &errs, &warns);
         /* internal nodes of the resulting tree (includes auto-created ones) */

@@ -634,6 +634,74 @@ void resolution_graft(Resolution *r, const char *spec, DiagList *errs, DiagList 
     }
 }
 
+/* --- prune (remove a tip or subtree) ------------------------------------ */
+
+static void remove_child(TreeNode *parent, const TreeNode *child)
+{
+    int k = 0;
+    for (int i = 0; i < parent->n_children; i++)
+        if (parent->children[i] != child) parent->children[k++] = parent->children[i];
+    parent->n_children = k;
+}
+
+/* Free the leaf nodes under `sub` and drop them from r->leaves (leaves are
+ * owned only there, so freeing here is safe; internal nodes of the pruned
+ * subtree stay in their owning arrays and are freed with the resolution). */
+static void free_pruned_leaves(Resolution *r, TreeNode *sub)
+{
+    TreeNode **pl = NULL; int n = 0, c = 0;
+    treenode_collect_leaves(sub, &pl, &n, &c);
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < r->n_leaves; j++)
+            if (r->leaves[j] == pl[i]) {
+                for (int k = j; k < r->n_leaves - 1; k++) r->leaves[k] = r->leaves[k + 1];
+                r->n_leaves--;
+                break;
+            }
+        treenode_free(pl[i]);
+    }
+    free(pl);
+}
+
+void resolution_prune(Resolution *r, const char *spec, DiagList *errs, DiagList *warns)
+{
+    (void)warns;
+    if (!r->root) return;
+    const char *p = spec;
+    while (*p) {
+        size_t len = strcspn(p, ",;");
+        char *id = xstrndup(p, len);
+        p += len; if (*p) p++;
+        char *s = id;
+        while (*s == ' ' || *s == '\t') s++;
+        char *e = s + strlen(s); while (e > s && (e[-1]==' '||e[-1]=='\t')) *--e = '\0';
+        if (*s == '\0') { free(id); continue; }
+
+        TreeNode *node = find_node(r->root, s);
+        if (!node) {
+            diag_add(errs, DIAG_PRUNE_UNKNOWN, -1, "remove: '%s' is not in the tree.", s);
+            free(id); continue;
+        }
+        if (node == r->root) {
+            Diagnostic *d = diag_add(errs, DIAG_PRUNE_INVALID, -1,
+                "remove: '%s' is the whole tree (the root); nothing would remain.", s);
+            diag_set_hint(d, "remove a smaller tip or clade instead.");
+            free(id); continue;
+        }
+
+        TreeNode *P = node->parent, *G = P->parent;
+        remove_child(P, node);
+        if (P->n_children == 1) {            /* suppress the now-unary parent */
+            TreeNode *only = P->children[0];
+            if (G) replace_child(G, P, only);
+            else { only->parent = NULL; r->root = only; }
+        }
+        free_pruned_leaves(r, node);
+        treenode_recompute(r->root);
+        free(id);
+    }
+}
+
 void resolution_free(Resolution *r)
 {
     if (!r) return;
