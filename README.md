@@ -108,10 +108,32 @@ bpp-tree [options] [JOINS_FILE]
 | `--quiet` | Suppress warnings/progress on stderr |
 | `--joins STRING` | Join formula as a `,`- or `;`-separated string |
 | `--imap FILE` | Imap file; fills individual counts automatically |
+| `--move LIST` | Prune-and-regraft moves `SRC->DST` (see below) |
 | `--rotate LIST` | Reverse the children of each named clade (see below) |
 | `--out PREFIX` | Write `PREFIX.nwk` and `PREFIX.stree` |
 | `--newick-only` | Print only the Newick string |
 | `--validate` | Validate only; exit 0 if valid, 1 if errors |
+
+### Moving clades (prune-and-regraft)
+
+`--move 'SRC->DST'` detaches clade `SRC` and regrafts it as the **sister** of
+`DST` — a subtree prune-and-regraft (SPR). Name clades by leaf-set label
+(`A_B`), explicit label, or (for `SRC`/`DST` that are single taxa) a tip name.
+Multiple moves, separated by `,`/`;`, apply **in order**:
+
+```
+$ bpp-tree --quiet --newick-only --joins 'A+B,C+D_E,A_B+C_D_E'                 # ((A,B),(C,(D,E)));
+$ bpp-tree --quiet --newick-only --joins 'A+B,C+D_E,A_B+C_D_E' --move 'A_B->D_E'  # (C,((D,E),(A,B)));
+```
+
+Moves are a transform applied to the finished tree — they live only on the
+command line, so the `.joins` file stays order-free. A move is rejected (with
+guidance) when the source is the root, the target lies inside the source
+(can't regraft onto your own subtree), the target is the source's parent, or
+either name is unknown; a move that is already in place is reported as a no-op.
+
+When combined with `--rotate`, moves are applied first (topology), then
+rotations (ordering).
 
 ### Rotating nodes
 

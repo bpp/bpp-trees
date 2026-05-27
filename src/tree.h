@@ -5,8 +5,10 @@
 typedef struct TreeNode {
     char            *name;           /* leaf name, or clade label (owned) */
     char            *implicit_label; /* sorted leaf names joined by '_' (owned) */
+    char            *explicit_label; /* explicit clade label, or NULL (owned) */
     struct TreeNode **children;      /* owned array; nodes owned by tree */
     int              n_children;
+    struct TreeNode *parent;         /* back-reference, non-owning; NULL at root */
     int              is_leaf;
     int              join_line;      /* source line that produced this node, or -1 */
 
@@ -27,8 +29,12 @@ void      treenode_add_child(TreeNode *parent, TreeNode *child);
 void      treenode_add_ref(TreeNode *node, int line);
 
 /* Finalise an internal node: collect/sort descendant leaf names and compute
- * implicit_label. Call after all children are attached. */
+ * implicit_label. Safe to call again to recompute (frees prior results). */
 void      treenode_finalize(TreeNode *node);
+
+/* Recompute leaf sets and implicit labels for the whole subtree, bottom-up
+ * (after a structural edit such as a move). */
+void      treenode_recompute(TreeNode *node);
 
 /* Recursively free a node and its children (children are owned). Leaf nodes
  * shared across the tree are owned once; free the root only. */

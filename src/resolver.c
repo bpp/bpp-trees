@@ -145,6 +145,7 @@ static void resolve_join(Resolution *r, const JoinList *joins, int j, int *leaf_
         if (ji >= 0) r->referenced[ji] = 1;
     }
     treenode_finalize(node);
+    if (st->label) node->explicit_label = xstrdup(st->label);
     r->join_node[j] = node;
     r->join_name[j] = st->label ? xstrdup(st->label)
                                  : xstrdup(node->implicit_label);
@@ -426,6 +427,139 @@ void resolution_rotate(Resolution *r, const char *spec, DiagList *errs, DiagList
     }
 }
 
+/* --- moves (subtree prune-and-regraft) ---------------------------------- */
+
+/* Find a node (clade by leaf-set or explicit label, or a tip) by traversing
+ * the current tree, so it works after earlier moves have restructured it. */
+static TreeNode *find_node_canon(TreeNode *n, const char *canon)
+{
+    if (n->is_leaf) return NULL;
+    if (strcmp(n->implicit_label, canon) == 0) return n;
+    for (int i = 0; i < n->n_children; i++) {
+        TreeNode *f = find_node_canon(n->children[i], canon);
+        if (f) return f;
+    }
+    return NULL;
+}
+
+static TreeNode *find_node_label(TreeNode *n, const char *id)
+{
+    if (n->is_leaf) return strcmp(n->name, id) == 0 ? n : NULL;
+    if (n->explicit_label && strcmp(n->explicit_label, id) == 0) return n;
+    for (int i = 0; i < n->n_children; i++) {
+        TreeNode *f = find_node_label(n->children[i], id);
+        if (f) return f;
+    }
+    return NULL;
+}
+
+static TreeNode *find_node(TreeNode *root, const char *id)
+{
+    if (strchr(id, '_')) {
+        char *canon = canon_label(id);
+        TreeNode *f = find_node_canon(root, canon);
+        free(canon);
+        return f;
+    }
+    return find_node_label(root, id);
+}
+
+static int is_ancestor(const TreeNode *anc, const TreeNode *node)
+{
+    for (const TreeNode *p = node; p; p = p->parent)
+        if (p == anc) return 1;
+    return 0;
+}
+
+static void replace_child(TreeNode *parent, const TreeNode *old, TreeNode *neu)
+{
+    for (int i = 0; i < parent->n_children; i++)
+        if (parent->children[i] == old) { parent->children[i] = neu; break; }
+    neu->parent = parent;
+}
+
+/* Apply one validated SPR: detach M, suppress its parent, regraft M as the
+ * sister of T. Updates r->root and registers the new graft node. */
+static void do_spr(Resolution *r, TreeNode *M, TreeNode *T)
+{
+    TreeNode *Pm = M->parent;
+    TreeNode *G  = Pm->parent;                 /* may be NULL (Pm is root) */
+    TreeNode *S  = (Pm->children[0] == M) ? Pm->children[1] : Pm->children[0];
+
+    /* prune M and suppress its now-unary parent Pm */
+    if (G) replace_child(G, Pm, S);
+    else { S->parent = NULL; r->root = S; }
+
+    /* regraft: subdivide the branch to T with a new node N = (T, M) */
+    TreeNode *Pt = T->parent;                  /* read after the prune */
+    TreeNode *N = treenode_internal(-1);
+    treenode_add_child(N, T);
+    treenode_add_child(N, M);
+    if (Pt) replace_child(Pt, T, N);
+    else { N->parent = NULL; r->root = N; }
+
+    r->move_nodes = xrealloc(r->move_nodes, (size_t)(r->n_move + 1) * sizeof(TreeNode *));
+    r->move_nodes[r->n_move++] = N;
+
+    treenode_recompute(r->root);
+}
+
+void resolution_move(Resolution *r, const char *spec, DiagList *errs, DiagList *warns)
+{
+    if (!r->root) return;
+    const char *p = spec;
+    while (*p) {
+        size_t len = strcspn(p, ",;");
+        char *piece = xstrndup(p, len);
+        p += len; if (*p) p++;
+
+        char *arrow = strstr(piece, "->");
+        if (!arrow) {
+            Diagnostic *d = diag_add(errs, DIAG_MOVE_INVALID, -1,
+                "move '%s' is not of the form SOURCE->TARGET.", piece);
+            diag_set_hint(d, "use an arrow, e.g.  --move 'A_B->C_D'.");
+            free(piece); continue;
+        }
+        *arrow = '\0';
+        char *src = piece, *tgt = arrow + 2;
+        while (*src == ' ' || *src == '\t') src++;
+        char *se = src + strlen(src); while (se > src && (se[-1]==' '||se[-1]=='\t')) *--se = '\0';
+        while (*tgt == ' ' || *tgt == '\t') tgt++;
+        char *te = tgt + strlen(tgt); while (te > tgt && (te[-1]==' '||te[-1]=='\t')) *--te = '\0';
+
+        TreeNode *M = find_node(r->root, src);
+        TreeNode *T = find_node(r->root, tgt);
+
+        if (!M || !T) {
+            Diagnostic *d = diag_add(errs, DIAG_MOVE_UNKNOWN, -1,
+                "move: %s '%s' is not in the tree.",
+                !M ? "source" : "target", !M ? src : tgt);
+            diag_set_hint(d, "name a clade by its members (e.g. 'A_B'), an "
+                             "explicit label, or a tip.");
+        } else if (M == T) {
+            diag_add(errs, DIAG_MOVE_INVALID, -1,
+                "move: source and target are the same clade ('%s').", src);
+        } else if (!M->parent) {
+            diag_add(errs, DIAG_MOVE_INVALID, -1,
+                "move: '%s' is the root and cannot be moved.", src);
+        } else if (is_ancestor(M, T)) {
+            Diagnostic *d = diag_add(errs, DIAG_MOVE_INVALID, -1,
+                "move: target '%s' lies inside the clade being moved ('%s').", tgt, src);
+            diag_set_hint(d, "a clade cannot be regrafted onto its own subtree.");
+        } else if (M->parent == T) {
+            diag_add(errs, DIAG_MOVE_INVALID, -1,
+                "move: target '%s' is the parent of '%s'; the move is degenerate.",
+                tgt, src);
+        } else if (M->parent == T->parent) {
+            diag_add(warns, DIAG_MOVE_NOOP, -1,
+                "move: '%s' is already the sister of '%s'; nothing to do.", src, tgt);
+        } else {
+            do_spr(r, M, T);
+        }
+        free(piece);
+    }
+}
+
 void resolution_free(Resolution *r)
 {
     if (!r) return;
@@ -441,6 +575,8 @@ void resolution_free(Resolution *r)
     free(r->leaves);
     for (int a = 0; a < r->n_auto; a++) treenode_free(r->auto_nodes[a]);
     free(r->auto_nodes);
+    for (int m = 0; m < r->n_move; m++) treenode_free(r->move_nodes[m]);
+    free(r->move_nodes);
     treenode_free(r->synth_root);
     free(r->roots);
     free(r);

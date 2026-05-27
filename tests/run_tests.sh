@@ -113,6 +113,23 @@ has   tr6 'ROTATE_IGNORED_TIP'  --joins 'A+B,C+D' --rotate 'A'
 has   tr7 'ROTATE_UNKNOWN'      --joins 'A+B,C+D' --rotate 'ZZ'
 exit_is tr8 1 --joins 'A+B,C+D' --rotate 'ZZ'
 
+# --- Moves (subtree prune-and-regraft) -----------------------------------
+# base tree: ((A,B),(C,(D,E)))  from joins A+B, C+D_E, A_B+C_D_E
+MV='--quiet --newick-only --joins A+B,C+D_E,A_B+C_D_E'
+check tm1 '(C,((D,E),(A,B)));'    $MV --move 'A_B->D_E'      # clade to sister of clade
+check tm2 '(B,(C,((D,E),A)));'    $MV --move 'A->D_E'        # tip can move
+check tm3 '(((A,B),(D,E)),C);'    $MV --move 'D_E->A_B'      # move up beside A_B
+check tm4 '((C,A),((D,B),E));'    $MV --move 'A->C;B->D'     # chained, in order
+has   tm5 'MOVE_INVALID'          $MV --move 'A_B->A'        # target inside source
+has   tm5b 'inside the clade'     $MV --move 'A_B->A'
+has   tm6 'MOVE_INVALID'          $MV --move 'A_B_C_D_E->A'  # moving the root
+has   tm7 'MOVE_INVALID'          --joins 'A+B,A_B+C' --move 'A_B->A_B_C'  # target is parent
+has   tm8 'MOVE_NOOP'             --joins 'A+B,A_B+C' --move 'A->B'        # already sisters
+has   tm9 'MOVE_UNKNOWN'          --joins 'A+B,A_B+C' --move 'Z_Q->A'      # unknown source
+exit_is tm10 1 --joins 'A+B,A_B+C' --move 'A_B->A'                         # invalid -> exit 1
+# move then rotate (moves apply first)
+check tm11 '(((B,A),(D,E)),C);'   $MV --move 'D_E->A_B' --rotate 'A_B'
+
 # --- Validate exit codes -------------------------------------------------
 exit_is t12 0 --validate --joins 'A+B'
 exit_is t13 1 --validate --joins 'A+B,C+D,E+F'   # 3+ roots -> incomplete

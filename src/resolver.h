@@ -28,6 +28,9 @@ typedef struct {
     TreeNode     **auto_nodes;  /* implicitly-created pair clades (owned) */
     int            n_auto;
 
+    TreeNode     **move_nodes;  /* nodes created by --move grafts (owned) */
+    int            n_move;
+
     TreeNode      *synth_root;  /* root synthesised by joining 2 roots (owned) */
 
     TreeNode      *root;        /* the tree root, or NULL if incomplete */
@@ -49,5 +52,12 @@ void        resolution_free(Resolution *r);
  * identifier matching no clade is an error in errs. */
 void        resolution_rotate(Resolution *r, const char *spec,
                               DiagList *errs, DiagList *warns);
+
+/* Apply subtree prune-and-regraft moves. `spec` is a ','/';' separated list
+ * of 'SOURCE->TARGET' moves, applied in order: SOURCE is detached and
+ * regrafted as the sister of TARGET. Invalid moves are errors in errs;
+ * a move that is already in place is a note in warns. */
+void        resolution_move(Resolution *r, const char *spec,
+                            DiagList *errs, DiagList *warns);
 
 #endif /* BPP_TREE_RESOLVER_H */

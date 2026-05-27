@@ -30,6 +30,7 @@ void treenode_add_child(TreeNode *parent, TreeNode *child)
     parent->children = xrealloc(parent->children,
                                 (size_t)(parent->n_children + 1) * sizeof(TreeNode *));
     parent->children[parent->n_children++] = child;
+    child->parent = parent;
 }
 
 void treenode_add_ref(TreeNode *node, int line)
@@ -45,6 +46,14 @@ void treenode_add_ref(TreeNode *node, int line)
 void treenode_finalize(TreeNode *node)
 {
     if (node->is_leaf) return;
+
+    /* free any previous computation (so this is safe to call as a recompute) */
+    for (int i = 0; i < node->n_leaf_names; i++) free(node->leaf_names[i]);
+    free(node->leaf_names);
+    node->leaf_names = NULL;
+    node->n_leaf_names = 0;
+    free(node->implicit_label);
+    node->implicit_label = NULL;
 
     int total = 0;
     for (int i = 0; i < node->n_children; i++)
@@ -89,6 +98,14 @@ void treenode_finalize(TreeNode *node)
     if (!node->name) node->name = xstrdup(lbl);
 }
 
+void treenode_recompute(TreeNode *node)
+{
+    if (!node || node->is_leaf) return;
+    for (int i = 0; i < node->n_children; i++)
+        treenode_recompute(node->children[i]);
+    treenode_finalize(node);
+}
+
 void treenode_free(TreeNode *node)
 {
     if (!node) return;
@@ -96,6 +113,7 @@ void treenode_free(TreeNode *node)
      * children (a shared leaf would be double-freed). */
     free(node->name);
     free(node->implicit_label);
+    free(node->explicit_label);
     free(node->children);
     for (int i = 0; i < node->n_leaf_names; i++) free(node->leaf_names[i]);
     free(node->leaf_names);

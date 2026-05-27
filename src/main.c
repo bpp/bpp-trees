@@ -26,6 +26,7 @@ typedef struct {
     char *imap_path;      /* --imap */
     char *out_prefix;     /* --out */
     char *rotate_spec;    /* --rotate */
+    char *move_spec;      /* --move */
     char *joins_file;     /* positional */
 } Options;
 
@@ -187,6 +188,9 @@ static void usage(FILE *fp)
 "      --imap FILE       Imap file; fills individual counts automatically\n"
 "\n"
 "Output:\n"
+"      --move LIST       Prune-and-regraft moves 'SRC->DST' (',' or ';'\n"
+"                        separated, applied in order): detach clade SRC and\n"
+"                        regraft it as the sister of DST.\n"
 "      --rotate LIST     Reverse the children of each named clade (',' or ';'\n"
 "                        separated; a leaf-set label like 'A_B' or an explicit\n"
 "                        label). Tips are ignored. Changes order, not topology.\n"
@@ -204,7 +208,7 @@ int main(int argc, char **argv)
     Options o = { .json_indent = 2 };
 
     enum { OPT_VERSION = 1000, OPT_JSON, OPT_INDENT, OPT_JOINS, OPT_IMAP,
-           OPT_OUT, OPT_NEWICK, OPT_VALIDATE, OPT_QUIET, OPT_ROTATE };
+           OPT_OUT, OPT_NEWICK, OPT_VALIDATE, OPT_QUIET, OPT_ROTATE, OPT_MOVE };
     static struct option lo[] = {
         {"help",        no_argument,       0, 'h'},
         {"version",     no_argument,       0, OPT_VERSION},
@@ -214,6 +218,7 @@ int main(int argc, char **argv)
         {"joins",       required_argument, 0, OPT_JOINS},
         {"imap",        required_argument, 0, OPT_IMAP},
         {"out",         required_argument, 0, OPT_OUT},
+        {"move",        required_argument, 0, OPT_MOVE},
         {"rotate",      required_argument, 0, OPT_ROTATE},
         {"newick-only", no_argument,       0, OPT_NEWICK},
         {"validate",    no_argument,       0, OPT_VALIDATE},
@@ -231,6 +236,7 @@ int main(int argc, char **argv)
             case OPT_JOINS:    o.joins_string = optarg; break;
             case OPT_IMAP:     o.imap_path = optarg; break;
             case OPT_OUT:      o.out_prefix = optarg; break;
+            case OPT_MOVE:     o.move_spec = optarg; break;
             case OPT_ROTATE:   o.rotate_spec = optarg; break;
             case OPT_NEWICK:   o.newick_only = 1; break;
             case OPT_VALIDATE: o.validate_only = 1; break;
@@ -303,7 +309,9 @@ int main(int argc, char **argv)
         r = resolve_tree(&joins, &errs);
         validate_joins(&joins, r, &errs);
         validate_tree(&joins, r, &errs, &warns);
-        /* apply node rotations to the resolved tree (output reflects them) */
+        /* transforms apply to the built tree: moves (topology) then rotations */
+        if (o.move_spec && !errs.count)
+            resolution_move(r, o.move_spec, &errs, &warns);
         if (o.rotate_spec && !errs.count)
             resolution_rotate(r, o.rotate_spec, &errs, &warns);
         /* internal nodes of the resulting tree (includes auto-created ones) */
