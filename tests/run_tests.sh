@@ -140,6 +140,11 @@ has   tg3 'GRAFT_UNKNOWN'        --joins 'A+B,C+D' --graft 'E->ZZ'              
 has   tg4 'GRAFT_INVALID'        --joins 'A+B,C+D' --graft 'A->C'                           # tip already present
 has   tg5 'GRAFT_INVALID'        --joins 'A+B'     --graft 'E+F->A'                         # '+' not a valid tip name
 has   tg6 'GRAFT_INVALID'        --joins 'A+B'     --graft 'X=Y->A'                         # '=' not a valid tip name
+# graft a whole subtree built from a parenthesised join-formula
+check tg7 '(A,((E,G),((P,Q),(R,S))));' --quiet --newick-only --joins 'E+G,A+E_G' --graft '(P+Q;R+S)->E_G'
+has   tg8 'already in the tree'  --joins 'A+B,C+A_B' --graft '(A+X)->C'                     # subtree tip clashes
+has   tg9 'not valid'            --joins 'A+B'       --graft '(X_Y_Z+W)->A'                 # subtree itself invalid
+has   tg10 'closing'             --joins 'A+B'       --graft '(C+D->A'                      # unbalanced parens
 
 # --- Prune (remove a tip or subtree) -------------------------------------
 check tp1 '(B,(C,D));'          --quiet --newick-only --joins 'A+B,C+D' --prune 'A'        # remove a tip
@@ -304,6 +309,10 @@ chk_contains ti24 "$ctl" 'tauprior'              # ... below the block too
 if [[ "$ctl" == *"(AFR, (EUR, (EAS, AMR)))"* ]]; then
     fail=$((fail+1)); echo "FAIL ti25: old species&tree block not removed"
 else pass=$((pass+1)); fi
+
+# graft a subtree in interactive mode
+sg="$(printf 'E+G\nA+E_G\ngraft (P+Q; R+S)->E_G\nnewick\nquit\n' | "$BIN" -i 2>&1)"
+chk_contains ti26 "$sg" '(A,((E,G),((P,Q),(R,S))));'
 
 # --- Interactive line editor (PTY; requires python3) ---------------------
 if command -v python3 >/dev/null 2>&1; then

@@ -187,6 +187,17 @@ $ bpp-tree --quiet --newick-only --joins 'A+B,C+D' --graft 'E->D'   # ((A,B),(C,
 contain `_` (it's a species name). Like `move`/`rotate`, grafts are a
 command-line/interactive transform, not part of the order-free `.joins` file.
 
+To graft a whole **subtree**, give a parenthesised join-formula as the source:
+
+```
+$ bpp-tree --quiet --newick-only --joins 'E+G,A+E_G' --graft '(P+Q; R+S)->E_G'
+(A,((E,G),((P,Q),(R,S))));
+```
+
+The subtree is built with the normal join rules and must resolve to a single
+tree of **new, unique** tips (none already in the target tree); otherwise the
+graft is rejected.
+
 ### Removing tips and subtrees
 
 `--prune 'NAME'` (interactive: `prune`/`remove`) removes a tip or clade and

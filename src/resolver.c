@@ -1,4 +1,5 @@
 #include "resolver.h"
+#include "validate.h"
 #include "util.h"
 
 #include <stdlib.h>
@@ -544,13 +545,100 @@ static TreeNode *add_new_leaf(Resolution *r, const char *name)
     return leaf;
 }
 
+static void res_own_node(Resolution *r, TreeNode *node)   /* take ownership for freeing */
+{
+    r->move_nodes = xrealloc(r->move_nodes, (size_t)(r->n_move + 1) * sizeof(TreeNode *));
+    r->move_nodes[r->n_move++] = node;
+}
+
+/* Graft a new node `child` (a fresh leaf or a subtree root) as the sister of
+ * `target`, recording the new parent for freeing. */
+static void splice_sister(Resolution *r, TreeNode *target, TreeNode *child)
+{
+    TreeNode *Pt = target->parent;
+    TreeNode *N = treenode_internal(-1);
+    treenode_add_child(N, target);
+    treenode_add_child(N, child);
+    if (Pt) replace_child(Pt, target, N);
+    else { N->parent = NULL; r->root = N; }
+    res_own_node(r, N);
+    treenode_recompute(r->root);
+}
+
+/* Build a subtree from a parenthesised join-formula and graft it onto target.
+ * Its tips must be new (not already in the active tree). Returns 1 on success. */
+static int graft_subtree(Resolution *r, const char *subspec, TreeNode *target, DiagList *errs)
+{
+    JoinList sj; DiagList se, sw;
+    joinlist_init(&sj); diag_init(&se); diag_init(&sw);
+    parse_joins_string(subspec, &sj, &se);
+    Resolution *sub = resolve_tree(&sj, &se);
+    validate_joins(&sj, sub, &se);
+    validate_tree(&sj, sub, &se, &sw);
+
+    int ok = 0;
+    if (se.count > 0) {
+        diag_add(errs, DIAG_GRAFT_INVALID, -1,
+            "graft subtree '(%s)' is not valid: %s", subspec, se.items[0].message);
+    } else if (!sub->root) {
+        diag_add(errs, DIAG_GRAFT_INVALID, -1,
+            "graft subtree '(%s)' is empty.", subspec);
+    } else {
+        const char *dup = NULL;
+        for (int i = 0; i < sub->n_leaves && !dup; i++)
+            for (int j = 0; j < r->n_leaves; j++)
+                if (strcmp(sub->leaves[i]->name, r->leaves[j]->name) == 0) { dup = sub->leaves[i]->name; break; }
+        if (dup) {
+            Diagnostic *d = diag_add(errs, DIAG_GRAFT_INVALID, -1,
+                "graft subtree: '%s' is already in the tree.", dup);
+            diag_set_hint(d, "a grafted subtree must introduce new, unique tips.");
+        } else {
+            ok = 1;
+        }
+    }
+
+    if (ok) {
+        TreeNode *sub_root = sub->root;
+        /* transfer the subtree's nodes to r (freed with r); null them in sub
+         * so resolution_free(sub) frees only its bookkeeping, not the nodes. */
+        for (int i = 0; i < sub->n_leaves; i++) {
+            r->leaves = xrealloc(r->leaves, (size_t)(r->n_leaves + 1) * sizeof(TreeNode *));
+            r->leaves[r->n_leaves++] = sub->leaves[i];
+        }
+        sub->n_leaves = 0;
+        for (int j = 0; j < sub->n_joins; j++)
+            if (sub->join_node[j]) { res_own_node(r, sub->join_node[j]); sub->join_node[j] = NULL; }
+        for (int a = 0; a < sub->n_auto; a++) { res_own_node(r, sub->auto_nodes[a]); sub->auto_nodes[a] = NULL; }
+        if (sub->synth_root) { res_own_node(r, sub->synth_root); sub->synth_root = NULL; }
+        if (r->n_leaves > 1) qsort(r->leaves, (size_t)r->n_leaves, sizeof(TreeNode *), cmp_leaf_by_name);
+        splice_sister(r, target, sub_root);
+    }
+
+    resolution_free(sub);
+    joinlist_free(&sj); diag_free(&se); diag_free(&sw);
+    return ok;
+}
+
+/* Length of the first graft in `p`, up to a ',' or ';' at parenthesis depth 0
+ * (so a parenthesised subtree spec's own separators are not split on). */
+static size_t graft_piece_len(const char *p)
+{
+    int depth = 0; size_t i = 0;
+    for (; p[i]; i++) {
+        if (p[i] == '(') depth++;
+        else if (p[i] == ')') { if (depth > 0) depth--; }
+        else if ((p[i] == ',' || p[i] == ';') && depth == 0) break;
+    }
+    return i;
+}
+
 void resolution_graft(Resolution *r, const char *spec, DiagList *errs, DiagList *warns)
 {
     (void)warns;
     if (!r->root) return;
     const char *p = spec;
     while (*p) {
-        size_t len = strcspn(p, ",;");
+        size_t len = graft_piece_len(p);
         char *piece = xstrndup(p, len);
         p += len; if (*p) p++;
 
@@ -558,7 +646,7 @@ void resolution_graft(Resolution *r, const char *spec, DiagList *errs, DiagList 
         if (!arrow) {
             Diagnostic *d = diag_add(errs, DIAG_GRAFT_INVALID, -1,
                 "graft '%s' is not of the form NEW->TARGET.", piece);
-            diag_set_hint(d, "e.g.  graft E->D   (add new tip E beside D).");
+            diag_set_hint(d, "e.g.  graft E->D, or  graft (A+B; C+D)->D.");
             free(piece); continue;
         }
         *arrow = '\0';
@@ -569,25 +657,7 @@ void resolution_graft(Resolution *r, const char *spec, DiagList *errs, DiagList 
         char *te = tgt + strlen(tgt); while (te > tgt && (te[-1]==' '||te[-1]=='\t')) *--te = '\0';
 
         if (*nw == '\0') {
-            diag_add(errs, DIAG_GRAFT_INVALID, -1, "graft: missing new tip name.");
-            free(piece); continue;
-        }
-        if (strchr(nw, '_')) {
-            Diagnostic *d = diag_add(errs, DIAG_GRAFT_INVALID, -1,
-                "graft: new tip '%s' contains '_', which is reserved for clades.", nw);
-            diag_set_hint(d, "a species name cannot contain '_'.");
-            free(piece); continue;
-        }
-        /* a tip name may contain only letters, digits and '-' */
-        int bad = 0;
-        for (const char *q = nw; *q; q++)
-            if (!((*q >= 'A' && *q <= 'Z') || (*q >= 'a' && *q <= 'z') ||
-                  (*q >= '0' && *q <= '9') || *q == '-')) { bad = 1; break; }
-        if (bad) {
-            Diagnostic *d = diag_add(errs, DIAG_GRAFT_INVALID, -1,
-                "graft: '%s' is not a valid new tip name.", nw);
-            diag_set_hint(d, "graft adds one new tip (letters, digits, '-'); to "
-                             "relocate an existing clade use 'move'.");
+            diag_add(errs, DIAG_GRAFT_INVALID, -1, "graft: missing source (NEW or (SPEC)).");
             free(piece); continue;
         }
         TreeNode *tnode = find_node(r->root, tgt);
@@ -596,25 +666,44 @@ void resolution_graft(Resolution *r, const char *spec, DiagList *errs, DiagList 
                 "graft: target '%s' is not in the tree.", tgt);
             free(piece); continue;
         }
+
+        if (nw[0] == '(') {                       /* graft a parenthesised subtree */
+            size_t L = strlen(nw);
+            if (L < 2 || nw[L - 1] != ')') {
+                diag_add(errs, DIAG_GRAFT_INVALID, -1,
+                    "graft: '%s' is missing a closing ')'.", nw);
+                free(piece); continue;
+            }
+            nw[L - 1] = '\0';
+            graft_subtree(r, nw + 1, tnode, errs);
+            free(piece); continue;
+        }
+
+        /* otherwise: a single new tip (letters, digits, '-') */
+        if (strchr(nw, '_')) {
+            Diagnostic *d = diag_add(errs, DIAG_GRAFT_INVALID, -1,
+                "graft: new tip '%s' contains '_', which is reserved for clades.", nw);
+            diag_set_hint(d, "a species name cannot contain '_'.");
+            free(piece); continue;
+        }
+        int bad = 0;
+        for (const char *q = nw; *q; q++)
+            if (!((*q >= 'A' && *q <= 'Z') || (*q >= 'a' && *q <= 'z') ||
+                  (*q >= '0' && *q <= '9') || *q == '-')) { bad = 1; break; }
+        if (bad) {
+            Diagnostic *d = diag_add(errs, DIAG_GRAFT_INVALID, -1,
+                "graft: '%s' is not a valid new tip name.", nw);
+            diag_set_hint(d, "graft adds one new tip (letters, digits, '-'), or a "
+                             "subtree '(A+B; C+D)'; 'move' relocates an existing clade.");
+            free(piece); continue;
+        }
         if (find_node(r->root, nw)) {
             Diagnostic *d = diag_add(errs, DIAG_GRAFT_INVALID, -1,
                 "graft: '%s' is already in the tree.", nw);
             diag_set_hint(d, "use 'move %s->%s' to relocate it instead.", nw, tgt);
             free(piece); continue;
         }
-
-        /* splice a new node N = (TARGET, newtip) in place of TARGET */
-        TreeNode *Pt = tnode->parent;
-        TreeNode *leaf = add_new_leaf(r, nw);
-        TreeNode *N = treenode_internal(-1);
-        treenode_add_child(N, tnode);
-        treenode_add_child(N, leaf);
-        if (Pt) replace_child(Pt, tnode, N);
-        else { N->parent = NULL; r->root = N; }
-
-        r->move_nodes = xrealloc(r->move_nodes, (size_t)(r->n_move + 1) * sizeof(TreeNode *));
-        r->move_nodes[r->n_move++] = N;
-        treenode_recompute(r->root);
+        splice_sister(r, tnode, add_new_leaf(r, nw));
         free(piece);
     }
 }

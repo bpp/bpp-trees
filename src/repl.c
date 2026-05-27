@@ -337,7 +337,7 @@ static void print_help(void)
 "Commands (anything else is read as a join formula and added to the tree):\n"
 "  A+B [= label]      add a join ('+' to join; ',' or ';' separate several)\n"
 "  move SRC -> DST    prune clade SRC and regraft it as the sister of DST\n"
-"  graft NEW -> DST   add a new tip NEW as the sister of DST\n"
+"  graft NEW -> DST   add a new tip NEW beside DST (or a subtree '(A+B;C+D)')\n"
 "  prune LIST         remove tips/subtrees (also 'remove')\n"
 "  rotate LIST        reverse the children of the named clade(s)\n"
 "  undo               undo the last change to the active tree\n"
