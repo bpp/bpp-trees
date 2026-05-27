@@ -130,6 +130,12 @@ exit_is tm10 1 --joins 'A+B,A_B+C' --move 'A_B->A'                         # inv
 # move then rotate (moves apply first)
 check tm11 '(((B,A),(D,E)),C);'   $MV --move 'D_E->A_B' --rotate 'A_B'
 
+# --- Grafts (add a new tip) ----------------------------------------------
+check tg1 '((A,B),(C,(D,E)));'  --quiet --newick-only --joins 'A+B,C+D' --graft 'E->D'
+check tg2 '(((A,B),E),(C,D));'  --quiet --newick-only --joins 'A+B,C+D' --graft 'E->A_B'  # onto a clade
+has   tg3 'GRAFT_UNKNOWN'        --joins 'A+B,C+D' --graft 'E->ZZ'                          # bad target
+has   tg4 'GRAFT_INVALID'        --joins 'A+B,C+D' --graft 'A->C'                           # tip already present
+
 # --- Tree display --------------------------------------------------------
 DSP='--quiet --display --joins A+B,C+D'
 has td1 '├─┬ A_B'    $DSP                                    # ancestor label (implicit)
@@ -242,6 +248,17 @@ chk_contains ti7 "$s3" 'incomplete'
 # undo removes the last change
 s4="$(printf 'A+B\nA_B+C\nnewick\nundo\nnewick\nquit\n' | "$BIN" -i 2>&1)"
 chk_contains ti8 "$s4" '(A,B);'              # after undo, back to 2-taxon tree
+
+# graft adds a tip; failed transforms are reported but not committed
+s5="$(printf 'A+B\nC+D\ngraft E->D\nnewick\ngraft Z->nope\ngraft A->C\nnewick\nquit\n' | "$BIN" -i 2>&1)"
+chk_contains ti9  "$s5" '((A,B),(C,(D,E)));' # graft applied
+chk_contains ti10 "$s5" 'GRAFT_UNKNOWN'      # bad target reported
+chk_contains ti11 "$s5" 'not applied'        # rejected, not committed
+
+# unknown commands and malformed joins do not pollute the tree
+s6="$(printf 'A+B\nprint\nfoo bar\nnewick\nquit\n' | "$BIN" -i 2>&1)"
+chk_contains ti12 "$s6" 'unknown command'
+chk_contains ti13 "$s6" '(A,B);'             # tree unchanged by junk input
 
 echo
 echo "passed: $pass   failed: $fail"

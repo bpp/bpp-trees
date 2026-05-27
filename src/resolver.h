@@ -60,4 +60,10 @@ void        resolution_rotate(Resolution *r, const char *spec,
 void        resolution_move(Resolution *r, const char *spec,
                             DiagList *errs, DiagList *warns);
 
+/* Graft new tips onto the tree. `spec` is a ','/';' separated list of
+ * 'NEW->TARGET' grafts: a new tip NEW is added as the sister of TARGET.
+ * Errors (NEW already present, TARGET missing, bad name) go to errs. */
+void        resolution_graft(Resolution *r, const char *spec,
+                             DiagList *errs, DiagList *warns);
+
 #endif /* BPP_TREE_RESOLVER_H */

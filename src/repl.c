@@ -17,7 +17,7 @@
 /* A tree is stored as the operations that build it: joins (declarative, an
  * order-free set) plus moves/rotations (applied in order afterwards). The
  * resolved tree is recomputed on demand. */
-typedef enum { OP_JOIN, OP_MOVE, OP_ROTATE } OpKind;
+typedef enum { OP_JOIN, OP_MOVE, OP_ROTATE, OP_GRAFT } OpKind;
 
 typedef struct { OpKind kind; char *spec; } Op;
 
@@ -86,6 +86,7 @@ static Resolution *tree_build(const NamedTree *t, JoinList *joins,
         for (int i = 0; i < t->n_ops; i++) {
             if (t->ops[i].kind == OP_MOVE)        resolution_move(r, t->ops[i].spec, errs, warns);
             else if (t->ops[i].kind == OP_ROTATE) resolution_rotate(r, t->ops[i].spec, errs, warns);
+            else if (t->ops[i].kind == OP_GRAFT)  resolution_graft(r, t->ops[i].spec, errs, warns);
             if (errs->count) break;
         }
     }
@@ -119,10 +120,8 @@ static void print_diags(const DiagList *d, const char *kind)
 {
     for (int i = 0; i < d->count; i++) {
         const Diagnostic *dg = &d->items[i];
-        if (dg->line_no >= 0)
-            printf("  %s [%s] (line %d): %s\n", kind, dg->code, dg->line_no, dg->message);
-        else
-            printf("  %s [%s]: %s\n", kind, dg->code, dg->message);
+        /* line numbers are per-entry and meaningless across a session — omit */
+        printf("  %s [%s]: %s\n", kind, dg->code, dg->message);
         if (dg->hint) printf("      hint: %s\n", dg->hint);
     }
 }
@@ -144,6 +143,33 @@ static void show_status(const NamedTree *t)
 
     resolution_free(r); joinlist_free(&joins);
     diag_free(&errs); diag_free(&warns);
+}
+
+/* Apply a transform only if it succeeds on the current tree, so a failed edit
+ * never gets committed (which would re-error on every later recompute). */
+static void try_transform(NamedTree *t, OpKind kind, const char *spec)
+{
+    JoinList joins; DiagList errs, warns;
+    diag_init(&errs); diag_init(&warns);
+    Resolution *r = tree_build(t, &joins, &errs, &warns);
+    int ok = 0;
+
+    if (!r->root) {
+        printf("the active tree isn't complete yet — finish it before editing\n");
+        print_diags(&errs, "error");
+    } else {
+        DiagList te; diag_init(&te);
+        if      (kind == OP_MOVE)   resolution_move(r, spec, &te, &warns);
+        else if (kind == OP_ROTATE) resolution_rotate(r, spec, &te, &warns);
+        else                        resolution_graft(r, spec, &te, &warns);
+        if (te.count == 0) ok = 1;
+        else { print_diags(&te, "error"); printf("(not applied)\n"); }
+        diag_free(&te);
+    }
+    resolution_free(r); joinlist_free(&joins);
+    diag_free(&errs); diag_free(&warns);
+
+    if (ok) { tree_add_op(t, kind, spec); show_status(t); }
 }
 
 static void cmd_display(const NamedTree *t, int ascii)
@@ -204,6 +230,7 @@ static void print_help(void)
 "Commands (anything else is read as a join formula and added to the tree):\n"
 "  A+B [= label]      add a join ('+' to join; ',' or ';' separate several)\n"
 "  move SRC -> DST    prune clade SRC and regraft it as the sister of DST\n"
+"  graft NEW -> DST   add a new tip NEW as the sister of DST\n"
 "  rotate LIST        reverse the children of the named clade(s)\n"
 "  undo               undo the last change to the active tree\n"
 "  display [ascii]    show the active tree as a branching diagram\n"
@@ -227,6 +254,19 @@ static char *trim(char *s)
     char *e = s + strlen(s);
     while (e > s && isspace((unsigned char)e[-1])) *--e = '\0';
     return s;
+}
+
+/* A contradiction (vs. a merely-incomplete tree): adding such a join must be
+ * rejected. Incomplete/ambiguous states are fine while building, so that
+ * joins can still be entered in any order. */
+static int is_blocking_code(const char *code)
+{
+    return strcmp(code, DIAG_TAXON_JOINED_TWICE) == 0
+        || strcmp(code, DIAG_CLADE_JOINED_TWICE) == 0
+        || strcmp(code, DIAG_DUPLICATE_LABEL) == 0
+        || strcmp(code, DIAG_LABEL_RESERVED_UNDERSCORE) == 0
+        || strcmp(code, DIAG_POLYTOMY_UNSUPPORTED) == 0
+        || strcmp(code, DIAG_CYCLE) == 0;
 }
 
 static void handle_line(Workspace *ws, char *raw, int *quit)
@@ -253,14 +293,17 @@ static void handle_line(Workspace *ws, char *raw, int *quit)
     }
     if (IS("move")) {
         if (!*arg) { printf("usage: move SRC -> DST\n"); return; }
-        tree_add_op(ws_active(ws), OP_MOVE, arg);
-        show_status(ws_active(ws));
+        try_transform(ws_active(ws), OP_MOVE, arg);
         return;
     }
     if (IS("rotate")) {
         if (!*arg) { printf("usage: rotate CLADE[,CLADE...]\n"); return; }
-        tree_add_op(ws_active(ws), OP_ROTATE, arg);
-        show_status(ws_active(ws));
+        try_transform(ws_active(ws), OP_ROTATE, arg);
+        return;
+    }
+    if (IS("graft") || IS("add")) {
+        if (!*arg) { printf("usage: graft NEW -> TARGET\n"); return; }
+        try_transform(ws_active(ws), OP_GRAFT, arg);
         return;
     }
     if (IS("undo")) {
@@ -312,9 +355,44 @@ static void handle_line(Workspace *ws, char *raw, int *quit)
 
     #undef IS
 
-    /* not a command — treat the whole line as a join formula */
-    tree_add_op(ws_active(ws), OP_JOIN, s);
-    show_status(ws_active(ws));
+    /* Not a command — try it as a join, but only commit if it parses cleanly
+     * into at least one real join. This keeps typos and unknown commands from
+     * polluting the active tree. */
+    JoinList tmp; DiagList terr;
+    joinlist_init(&tmp); diag_init(&terr);
+    if (strchr(s, '\n')) parse_joins_text(s, &tmp, &terr);
+    else                 parse_joins_string(s, &tmp, &terr);
+    int real = 0;
+    for (int i = 0; i < tmp.count; i++)
+        if (tmp.items[i].n_operands >= 2) real = 1;
+
+    if (terr.count == 0 && real) {
+        NamedTree *t = ws_active(ws);
+        tree_add_op(t, OP_JOIN, s);
+        /* trial-build: reject a join that creates a contradiction (a taxon or
+         * clade used twice, etc.); an incomplete/ambiguous result is fine. */
+        JoinList j2; DiagList e2, w2;
+        diag_init(&e2); diag_init(&w2);
+        Resolution *r2 = tree_build(t, &j2, &e2, &w2);
+        int blocked = 0;
+        for (int i = 0; i < e2.count; i++)
+            if (is_blocking_code(e2.items[i].code)) blocked = 1;
+        if (blocked) {
+            print_diags(&e2, "error");
+            printf("(not added)\n");
+            free(t->ops[--t->n_ops].spec);          /* undo the commit */
+        }
+        resolution_free(r2); joinlist_free(&j2);
+        diag_free(&e2); diag_free(&w2);
+        if (!blocked) show_status(t);
+    } else if (strchr(s, '+')) {
+        print_diags(&terr, "error");
+        printf("(not added — fix the join and retype it)\n");
+    } else {
+        printf("unknown command '%.*s' — type 'help' for the command list\n",
+               (int)clen, cmd);
+    }
+    joinlist_free(&tmp); diag_free(&terr);
 }
 
 /* --- entry point -------------------------------------------------------- */

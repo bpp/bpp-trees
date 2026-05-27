@@ -112,6 +112,7 @@ bpp-tree [options] [JOINS_FILE]
 | `--display` | Also print the tree as an indented branching diagram |
 | `--ascii` | With `--display`, use ASCII connectors instead of Unicode |
 | `--move LIST` | Prune-and-regraft moves `SRC->DST` (see below) |
+| `--graft LIST` | Add new tips `NEW->DST` (see below) |
 | `--rotate LIST` | Reverse the children of each named clade (see below) |
 | `--out PREFIX` | Write `PREFIX.nwk` and `PREFIX.stree` |
 | `--newick-only` | Print only the Newick string |
@@ -169,6 +170,22 @@ either name is unknown; a move that is already in place is reported as a no-op.
 When combined with `--rotate`, moves are applied first (topology), then
 rotations (ordering).
 
+### Grafting new tips
+
+`--graft 'NEW->DST'` adds a brand-new tip `NEW` as the sister of an existing
+node `DST` (a tip or clade), subdividing `DST`'s branch. This is how you grow
+a finished tree — a join can't, because joins use each tip once, so reusing an
+existing tip is a `TAXON_JOINED_TWICE` error. `move` relocates existing clades;
+`graft` adds new ones.
+
+```
+$ bpp-tree --quiet --newick-only --joins 'A+B,C+D' --graft 'E->D'   # ((A,B),(C,(D,E)));
+```
+
+`NEW` must not already be in the tree (use `move` to relocate) and cannot
+contain `_` (it's a species name). Like `move`/`rotate`, grafts are a
+command-line/interactive transform, not part of the order-free `.joins` file.
+
 ### Rotating nodes
 
 `--rotate` reverses the child order of one or more clades — it changes the
@@ -214,6 +231,7 @@ bpp-tree> quit
 | --- | --- |
 | `A+B` (any join) | add a join to the active tree |
 | `move SRC -> DST` | prune `SRC`, regraft as sister of `DST` |
+| `graft NEW -> DST` | add a new tip `NEW` as sister of `DST` |
 | `rotate LIST` | reverse children of the named clade(s) |
 | `undo` | undo the last change to the active tree |
 | `display [ascii]` / `newick` / `status` | view the active tree |

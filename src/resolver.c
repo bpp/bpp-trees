@@ -560,6 +560,80 @@ void resolution_move(Resolution *r, const char *spec, DiagList *errs, DiagList *
     }
 }
 
+/* --- grafts (add a new tip onto a branch) ------------------------------- */
+
+static TreeNode *add_new_leaf(Resolution *r, const char *name)
+{
+    TreeNode *leaf = treenode_leaf(name);
+    r->leaves = xrealloc(r->leaves, (size_t)(r->n_leaves + 1) * sizeof(TreeNode *));
+    r->leaves[r->n_leaves++] = leaf;
+    qsort(r->leaves, (size_t)r->n_leaves, sizeof(TreeNode *), cmp_leaf_by_name);
+    return leaf;
+}
+
+void resolution_graft(Resolution *r, const char *spec, DiagList *errs, DiagList *warns)
+{
+    (void)warns;
+    if (!r->root) return;
+    const char *p = spec;
+    while (*p) {
+        size_t len = strcspn(p, ",;");
+        char *piece = xstrndup(p, len);
+        p += len; if (*p) p++;
+
+        char *arrow = strstr(piece, "->");
+        if (!arrow) {
+            Diagnostic *d = diag_add(errs, DIAG_GRAFT_INVALID, -1,
+                "graft '%s' is not of the form NEW->TARGET.", piece);
+            diag_set_hint(d, "e.g.  graft E->D   (add new tip E beside D).");
+            free(piece); continue;
+        }
+        *arrow = '\0';
+        char *nw = piece, *tgt = arrow + 2;
+        while (*nw == ' ' || *nw == '\t') nw++;
+        char *ne = nw + strlen(nw); while (ne > nw && (ne[-1]==' '||ne[-1]=='\t')) *--ne = '\0';
+        while (*tgt == ' ' || *tgt == '\t') tgt++;
+        char *te = tgt + strlen(tgt); while (te > tgt && (te[-1]==' '||te[-1]=='\t')) *--te = '\0';
+
+        if (*nw == '\0') {
+            diag_add(errs, DIAG_GRAFT_INVALID, -1, "graft: missing new tip name.");
+            free(piece); continue;
+        }
+        if (strchr(nw, '_')) {
+            Diagnostic *d = diag_add(errs, DIAG_GRAFT_INVALID, -1,
+                "graft: new tip '%s' contains '_', which is reserved for clades.", nw);
+            diag_set_hint(d, "a species name cannot contain '_'.");
+            free(piece); continue;
+        }
+        TreeNode *tnode = find_node(r->root, tgt);
+        if (!tnode) {
+            diag_add(errs, DIAG_GRAFT_UNKNOWN, -1,
+                "graft: target '%s' is not in the tree.", tgt);
+            free(piece); continue;
+        }
+        if (find_node(r->root, nw)) {
+            Diagnostic *d = diag_add(errs, DIAG_GRAFT_INVALID, -1,
+                "graft: '%s' is already in the tree.", nw);
+            diag_set_hint(d, "use 'move %s->%s' to relocate it instead.", nw, tgt);
+            free(piece); continue;
+        }
+
+        /* splice a new node N = (TARGET, newtip) in place of TARGET */
+        TreeNode *Pt = tnode->parent;
+        TreeNode *leaf = add_new_leaf(r, nw);
+        TreeNode *N = treenode_internal(-1);
+        treenode_add_child(N, tnode);
+        treenode_add_child(N, leaf);
+        if (Pt) replace_child(Pt, tnode, N);
+        else { N->parent = NULL; r->root = N; }
+
+        r->move_nodes = xrealloc(r->move_nodes, (size_t)(r->n_move + 1) * sizeof(TreeNode *));
+        r->move_nodes[r->n_move++] = N;
+        treenode_recompute(r->root);
+        free(piece);
+    }
+}
+
 void resolution_free(Resolution *r)
 {
     if (!r) return;

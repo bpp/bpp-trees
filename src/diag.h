@@ -23,6 +23,9 @@
 /* --move: a source/target that names nothing, or an illegal move. */
 #define DIAG_MOVE_UNKNOWN           "MOVE_UNKNOWN"
 #define DIAG_MOVE_INVALID           "MOVE_INVALID"
+/* graft: add a new tip as the sister of an existing node. */
+#define DIAG_GRAFT_UNKNOWN          "GRAFT_UNKNOWN"
+#define DIAG_GRAFT_INVALID          "GRAFT_INVALID"
 #define DIAG_EMPTY_FILE             "EMPTY_FILE"
 #define DIAG_SINGLE_TAXON_TREE      "SINGLE_TAXON_TREE"
 #define DIAG_SYNTAX                 "SYNTAX"
