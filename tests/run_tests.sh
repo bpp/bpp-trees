@@ -112,6 +112,9 @@ check tr5 '((A,B),(C,D));'  --quiet --newick-only --joins 'A+B,C+D' --rotate 'A'
 has   tr6 'ROTATE_IGNORED_TIP'  --joins 'A+B,C+D' --rotate 'A'
 has   tr7 'ROTATE_UNKNOWN'      --joins 'A+B,C+D' --rotate 'ZZ'
 exit_is tr8 1 --joins 'A+B,C+D' --rotate 'ZZ'
+# tr9: rotate a clade produced by a transform (found via tree traversal, so it
+# works even though the node lives in the resolver's move/graft array)
+check tr9 '((H,(A,B)),(C,D));'  --quiet --newick-only --joins 'A+B,C+D' --graft 'H->A_B' --rotate 'A_B_H'
 
 # --- Moves (subtree prune-and-regraft) -----------------------------------
 # base tree: ((A,B),(C,(D,E)))  from joins A+B, C+D_E, A_B+C_D_E

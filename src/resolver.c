@@ -365,36 +365,9 @@ Resolution *resolve_tree(const JoinList *joins, DiagList *errs)
     return r;
 }
 
-/* Internal node matching id (leaf-set label or explicit label), or NULL. */
-static TreeNode *find_internal(const Resolution *r, const char *id)
-{
-    if (strchr(id, '_')) {
-        char *canon = canon_label(id);
-        TreeNode *res = NULL;
-        for (int j = 0; j < r->n_joins && !res; j++)
-            if (r->resolved[j] && strcmp(r->join_node[j]->implicit_label, canon) == 0)
-                res = r->join_node[j];
-        for (int a = 0; a < r->n_auto && !res; a++)
-            if (strcmp(r->auto_nodes[a]->implicit_label, canon) == 0)
-                res = r->auto_nodes[a];
-        if (!res && r->synth_root &&
-            strcmp(r->synth_root->implicit_label, canon) == 0)
-            res = r->synth_root;
-        free(canon);
-        return res;
-    }
-    for (int j = 0; j < r->n_joins; j++)   /* explicit label */
-        if (r->resolved[j] && strcmp(r->join_name[j], id) == 0)
-            return r->join_node[j];
-    return NULL;
-}
-
-static int is_tip_name(const Resolution *r, const char *id)
-{
-    for (int i = 0; i < r->n_leaves; i++)
-        if (strcmp(r->leaves[i]->name, id) == 0) return 1;
-    return 0;
-}
+/* Find any node (tip, or clade by leaf-set/explicit label) by traversing the
+ * current tree — defined below; works for nodes produced by edits too. */
+static TreeNode *find_node(TreeNode *root, const char *id);
 
 void resolution_rotate(Resolution *r, const char *spec, DiagList *errs, DiagList *warns)
 {
@@ -407,18 +380,18 @@ void resolution_rotate(Resolution *r, const char *spec, DiagList *errs, DiagList
         while (e > s && (e[-1] == ' ' || e[-1] == '\t')) e--;
         if (e > s) {
             char *tok = xstrndup(s, (size_t)(e - s));
-            TreeNode *node = find_internal(r, tok);
-            if (node) {
-                treenode_rotate(node);
-            } else if (!strchr(tok, '_') && is_tip_name(r, tok)) {
-                diag_add(warns, DIAG_ROTATE_IGNORED_TIP, -1,
-                    "rotate: '%s' is a tip and has no children to rotate; ignored.",
-                    tok);
-            } else {
+            TreeNode *node = find_node(r->root, tok);
+            if (!node) {
                 Diagnostic *d = diag_add(errs, DIAG_ROTATE_UNKNOWN, -1,
                     "rotate: '%s' is not a clade in the tree.", tok);
                 diag_set_hint(d, "name a clade by its members (e.g. 'A_B') or by "
                                  "its explicit label.");
+            } else if (node->is_leaf) {
+                diag_add(warns, DIAG_ROTATE_IGNORED_TIP, -1,
+                    "rotate: '%s' is a tip and has no children to rotate; ignored.",
+                    tok);
+            } else {
+                treenode_rotate(node);
             }
             free(tok);
         }
