@@ -23,6 +23,11 @@ typedef struct TreeNode {
 
     int             *mig;            /* migration marks: +k source / -k dest of band k */
     int              n_mig;
+
+    char           **intro_mark;     /* introgression display markers (owned) */
+    int             *intro_key;      /* colour key per marker (event number) */
+    int              n_intro;
+
     int              show_label;     /* emit this internal node's label in Newick */
 } TreeNode;
 
@@ -64,6 +69,11 @@ void      treenode_rotate(TreeNode *node);
 /* Record a migration mark on a node: +k if it is the source of band k, -k if
  * the destination (k >= 1). Shown after the label by treenode_display. */
 void      treenode_add_mig(TreeNode *node, int signed_band);
+
+/* Record an introgression display marker (e.g. "H1\xe2\x87\x9d" on the donor,
+ * "\xe2\x87\x9dH1(.30)" on the recipient) coloured by event number `key`.
+ * The string is copied. Shown after the label by treenode_display. */
+void      treenode_add_intro(TreeNode *node, const char *mark, int key);
 
 /* The node's BPP population name: a tip's name, or a clade's explicit label
  * (falling back to its implicit leaf-set label). */

@@ -234,6 +234,17 @@ int introlist_apply(IntroList *g, Resolution *r, DiagList *errs)
             e->label = xstrdup(buf);
         }
         if (!D->is_leaf) D->show_label = 1;   /* donor population must be named */
+
+        /* display markers: "H1->" on the donor, "->H1(.30)" on the recipient.
+         * \xe2\x87\x9d is U+21DD (rightwards squiggle), flow donor->recipient. */
+        char pf[16];                          /* ".30" form of phi */
+        snprintf(pf, sizeof pf, "%.2f", e->phi);
+        const char *pp = pf[0] == '0' ? pf + 1 : pf;
+        char dm[48], rm[64];
+        snprintf(dm, sizeof dm, "%s\xe2\x87\x9d", e->label);
+        snprintf(rm, sizeof rm, "\xe2\x87\x9d%s(%s)", e->label, pp);
+        treenode_add_intro(D, dm, k + 1);
+        treenode_add_intro(R, rm, k + 1);
     }
     return ok;
 }

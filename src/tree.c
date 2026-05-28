@@ -40,6 +40,17 @@ void treenode_add_mig(TreeNode *node, int signed_band)
     node->mig[node->n_mig++] = signed_band;
 }
 
+void treenode_add_intro(TreeNode *node, const char *mark, int key)
+{
+    node->intro_mark = xrealloc(node->intro_mark,
+                                (size_t)(node->n_intro + 1) * sizeof(char *));
+    node->intro_key  = xrealloc(node->intro_key,
+                                (size_t)(node->n_intro + 1) * sizeof(int));
+    node->intro_mark[node->n_intro] = xstrdup(mark);
+    node->intro_key[node->n_intro]  = key;
+    node->n_intro++;
+}
+
 const char *treenode_bpp_name(const TreeNode *node)
 {
     if (node->is_leaf) return node->name;
@@ -155,6 +166,17 @@ static void display_mig(const TreeNode *n, FILE *fp, int color)
     }
 }
 
+/* Append introgression markers (already rendered text) after a label. */
+static void display_intro(const TreeNode *n, FILE *fp, int color)
+{
+    for (int i = 0; i < n->n_intro; i++) {
+        fputc(' ', fp);
+        if (color) fputs(treenode_mig_color(n->intro_key[i]), fp);
+        fputs(n->intro_mark[i], fp);
+        if (color) fputs(TREENODE_MIG_RESET, fp);
+    }
+}
+
 static void display_rec(const TreeNode *n, const char *prefix, int is_last,
                         int is_root, FILE *fp, const DisplayGlyphs *g,
                         const char *lead, int color)
@@ -170,6 +192,7 @@ static void display_rec(const TreeNode *n, const char *prefix, int is_last,
     fputc(' ', fp);
     fputs(display_label(n), fp);
     display_mig(n, fp, color);
+    display_intro(n, fp, color);
     fputc('\n', fp);
 
     if (n->is_leaf) return;
@@ -211,6 +234,9 @@ void treenode_free(TreeNode *node)
     free(node->leaf_names);
     free(node->ref_lines);
     free(node->mig);
+    for (int i = 0; i < node->n_intro; i++) free(node->intro_mark[i]);
+    free(node->intro_mark);
+    free(node->intro_key);
     free(node);
 }
 

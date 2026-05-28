@@ -353,6 +353,88 @@ printf 'new mm\nP+Q\nR+S\nmigration P->R\nsession save %s/s2\nquit\n' "$TMP" | "
 sl2="$(printf 'session load %s/s2\nuse mm\nmigration\nquit\n' "$TMP" | "$BIN" -i 2>&1)"
 chk_contains ti35 "$sl2" 'M1:  P → R'
 
+# --- MSC-I introgression -------------------------------------------------
+
+# CLI: model A network emits the canonical eNewick with phi on the donor ref
+nA="$("$BIN" --joins 'A+B,A_B+C' --introgression 'C->A phi=0.3' --newick-only)"
+exit_is ti36 0 --joins 'A+B,A_B+C' --introgression 'C->A phi=0.3' --newick-only
+chk_contains ti37 "$nA" '(A)H1[&tau-parent=yes]'
+chk_contains ti38 "$nA" '&phi=0.3'
+chk_contains ti39 "$nA" '&tau-parent=yes'
+
+# Model B: src=node -> tau-parent=no on the donor (bare) occurrence
+nB="$("$BIN" --joins 'A+B,A_B+C' --introgression 'C->A phi=0.05 src=node' --newick-only)"
+chk_contains ti40 "$nB" '&tau-parent=no'
+
+# Model C: both tau-parent=no
+nC="$("$BIN" --joins 'A+B,A_B+C' --introgression 'C->A phi=0.2 src=node dst=node' --newick-only)"
+chk_contains ti41 "$nC" '(A)H1[&tau-parent=no]'
+
+# Ancestor/descendant rejected (non-contemporaneous)
+err="$("$BIN" --joins 'A+B,A_B+C' --introgression 'A_B->A' 2>&1)"
+chk_contains ti42 "$err" 'do not coexist'
+
+# Phi out of range
+err="$("$BIN" --joins 'A+B,A_B+C' --introgression 'C->A phi=1.5' 2>&1)"
+chk_contains ti43 "$err" 'out of range'
+
+# Migration + introgression on the same tree = MODEL_CONFLICT
+err="$("$BIN" --joins 'A+B,A_B+C' --migration 'A->C' --introgression 'C->A' 2>&1)"
+chk_contains ti44 "$err" 'MODEL_CONFLICT'
+
+# At most one event per taxon pair (regardless of direction)
+err="$("$BIN" --joins 'A+B,A_B+C' --introgression 'C->A ; A->C' 2>&1)"
+chk_contains ti45 "$err" 'more than one event'
+
+# REPL: introgress + mode-lock + clear + hybrid
+ri="$(printf 'A+B\nA_B+C\nintrogress C->A phi=0.3\nnewick\nmigration C->A\nintro clear\nmigration C->A\nquit\n' \
+        | "$BIN" -i 2>&1)"
+chk_contains ti46 "$ri" 'added introgression H1'
+chk_contains ti47 "$ri" '&phi=0.3'
+chk_contains ti48 "$ri" 'mutually exclusive'
+chk_contains ti49 "$ri" 'added migration M1'           # works after intro cleared
+
+# REPL: hybrid bundled command is sugar for graft + introgress
+rh="$(printf 'A+B\nA_B+C\nhybrid H : A, C phi=0.4\nnewick\nquit\n' | "$BIN" -i 2>&1)"
+chk_contains ti50 "$rh" '(A,(H)H1[&tau-parent=yes])'    # H grafted beside A
+chk_contains ti51 "$rh" '&phi=0.4'
+
+# REPL: session save/load round-trips introgression events
+printf 'new net\nA+B\nA_B+C\nintrogress C->A phi=0.3 src=node\nsession save %s/si\nquit\n' "$TMP" \
+    | "$BIN" -i >/dev/null 2>&1
+slI="$(printf 'session load %s/si\nuse net\nintrogression\nnewick\nquit\n' "$TMP" | "$BIN" -i 2>&1)"
+chk_contains ti52 "$slI" 'model B'
+chk_contains ti53 "$slI" '&tau-parent=no'
+
+# bpp-lint round-trip: a complete MSC-I control file lints clean.
+LINT=$HOME/repos/bpp-lint/bpp-lint
+if [[ -x "$LINT" ]]; then
+    BLK="$("$BIN" --joins 'A+B,A_B+C' --introgression 'C->A phi=0.3' --newick-only)"
+    cat > "$TMP/lint.ctl" <<EOF
+seed = 1
+seqfile = x.txt
+Imapfile = x.imap
+jobname = out
+nloci = 100
+species&tree = 3  A  B  C
+                  2  2  2
+  $BLK
+phiprior = 1 1
+thetaprior = 3 0.004
+tauprior = 3 0.002
+burnin = 1000
+sampfreq = 2
+nsample = 10000
+EOF
+    if "$LINT" "$TMP/lint.ctl" 2>&1 | grep -qE '(^|: )error:'; then
+        fail=$((fail+1)); echo "FAIL ti54: bpp-lint rejects an MSC-I control file"
+    else pass=$((pass+1)); fi
+    # phiprior is mandatory when &phi= is present -> lint flags it when omitted
+    grep -v '^phiprior' "$TMP/lint.ctl" > "$TMP/lint.nophi.ctl"
+    lo="$("$LINT" "$TMP/lint.nophi.ctl" 2>&1)"
+    chk_contains ti55 "$lo" "'phiprior' is required"
+fi
+
 # --- Interactive line editor (PTY; requires python3) ---------------------
 if command -v python3 >/dev/null 2>&1; then
     if python3 - "$BIN" "$FIX/samples.imap" <<'PY'

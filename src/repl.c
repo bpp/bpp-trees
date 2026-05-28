@@ -10,6 +10,7 @@
 #include "imap.h"
 #include "block.h"
 #include "migrate.h"
+#include "introgress.h"
 #include "lineedit.h"
 
 #include <ctype.h>
@@ -31,8 +32,9 @@ typedef struct {
     char   *name;
     Op     *ops;
     int     n_ops, cap;
-    char   *imap_path;   /* attached Imap file, or NULL */
-    MigList mig;         /* migration bands */
+    char     *imap_path;   /* attached Imap file, or NULL */
+    MigList   mig;         /* migration bands (MSC-M) */
+    IntroList intro;       /* introgression events (MSC-I); mutually exclusive */
 } NamedTree;
 
 typedef struct {
@@ -50,6 +52,7 @@ static void tree_init(NamedTree *t, const char *name)
     t->n_ops = t->cap = 0;
     t->imap_path = NULL;
     miglist_init(&t->mig);
+    introlist_init(&t->intro);
 }
 
 static void tree_add_op(NamedTree *t, OpKind kind, const char *spec)
@@ -70,6 +73,7 @@ static void tree_free(NamedTree *t)
     free(t->name);
     free(t->imap_path);
     miglist_free(&t->mig);
+    introlist_free(&t->intro);
 }
 
 static void tree_copy(NamedTree *dst, const NamedTree *src, const char *name)
@@ -79,6 +83,7 @@ static void tree_copy(NamedTree *dst, const NamedTree *src, const char *name)
         tree_add_op(dst, src->ops[i].kind, src->ops[i].spec);
     if (src->imap_path) dst->imap_path = xstrdup(src->imap_path);
     miglist_copy(&dst->mig, &src->mig);
+    introlist_copy(&dst->intro, &src->intro);
 }
 
 /* Build the resolved tree from the op list: accumulate all joins, resolve,
@@ -198,12 +203,14 @@ static void cmd_display(const NamedTree *t, int ascii)
     if (r->root) {
         DiagList me; diag_init(&me);
         miglist_apply(&t->mig, r, &me);          /* annotate nodes; collect errors */
+        IntroList intro_copy; introlist_copy(&intro_copy, &t->intro);
+        introlist_apply(&intro_copy, r, &me);
         treenode_display(r->root, stdout, ascii, "");
-        if (t->mig.count) {
-            printf("\n");
-            migration_legend(&t->mig, r, stdout, treenode_use_color(ascii, stdout));
-        }
-        print_diags(&me, "error");               /* any invalid bands */
+        int color = treenode_use_color(ascii, stdout);
+        if (t->mig.count)   { printf("\n"); migration_legend(&t->mig, r, stdout, color); }
+        if (t->intro.count) { printf("\n"); introgress_legend(&intro_copy, r, stdout, color); }
+        introlist_free(&intro_copy);
+        print_diags(&me, "error");               /* any invalid bands/events */
         diag_free(&me);
     } else {
         print_diags(&errs, "error");
@@ -221,7 +228,16 @@ static void cmd_newick(const NamedTree *t)
     Resolution *r = tree_build(t, &joins, &errs, &warns);
 
     if (r->root) {
-        char *body = treenode_to_newick(r->root);
+        char *body;
+        if (t->intro.count) {
+            IntroList ic; introlist_copy(&ic, &t->intro);
+            DiagList ie; diag_init(&ie);
+            introlist_apply(&ic, r, &ie);            /* set labels, show_label */
+            body = introgress_newick(&ic, r);
+            introlist_free(&ic); diag_free(&ie);
+        } else {
+            body = treenode_to_newick(r->root);
+        }
         printf("%s;\n", body);
         free(body);
     } else {
@@ -296,6 +312,14 @@ static int workspace_save(const Workspace *ws, const char *path)
         if (t->imap_path) fprintf(f, "imap %s\n", t->imap_path);
         for (int b = 0; b < t->mig.count; b++)
             fprintf(f, "mig %s %s\n", t->mig.items[b].src, t->mig.items[b].dst);
+        for (int k = 0; k < t->intro.count; k++) {
+            const IntroEvent *e = &t->intro.items[k];
+            fprintf(f, "intro %s %s %g %s %s %s\n",
+                    e->donor, e->recip, e->phi,
+                    e->src == TAU_NODE ? "node" : "branch",
+                    e->dst == TAU_NODE ? "node" : "branch",
+                    e->label ? e->label : "-");
+        }
         written++;
     }
     fprintf(f, "active %s\n", ws->trees[ws->active].name);
@@ -341,6 +365,31 @@ static int workspace_load(Workspace *ws, const char *path)
                 char *q = p; while (*q && *q != ' ' && *q != '\t') q++;
                 if (*q) { *q++ = '\0'; while (*q==' '||*q=='\t') q++;
                           if (*q) miglist_add(&cur->mig, p, q); }
+            } else if (KW("intro") && cur) {
+                /* intro DONOR RECIP PHI SRC DST LABEL */
+                char *tok[6] = {0}; int n = 0;
+                char *q = p;
+                while (n < 6 && *q) {
+                    while (*q == ' ' || *q == '\t') q++;
+                    if (!*q) break;
+                    tok[n++] = q;
+                    while (*q && *q != ' ' && *q != '\t') q++;
+                    if (*q) { *q = '\0'; q++; }
+                }
+                if (n >= 5) {
+                    IntroEvent ev; memset(&ev, 0, sizeof ev);
+                    ev.donor = xstrdup(tok[0]); ev.recip = xstrdup(tok[1]);
+                    ev.phi = atof(tok[2]); ev.phi2 = -1.0;
+                    ev.src = strcmp(tok[3], "node") == 0 ? TAU_NODE : TAU_BRANCH;
+                    ev.dst = strcmp(tok[4], "node") == 0 ? TAU_NODE : TAU_BRANCH;
+                    ev.label = (n >= 6 && strcmp(tok[5], "-") != 0) ? xstrdup(tok[5]) : NULL;
+                    if (cur->intro.count == cur->intro.cap) {
+                        cur->intro.cap = cur->intro.cap ? cur->intro.cap * 2 : 4;
+                        cur->intro.items = xrealloc(cur->intro.items,
+                                                    (size_t)cur->intro.cap * sizeof(IntroEvent));
+                    }
+                    cur->intro.items[cur->intro.count++] = ev;
+                }
             } else if (kl == 1 && cur && *p) {
                 OpKind k; int ok = 1;
                 switch (kw[0]) {
@@ -383,13 +432,17 @@ static void cmd_block(const NamedTree *t, const char *arg)
         resolution_free(r); joinlist_free(&joins); diag_free(&errs); diag_free(&warns);
         return;
     }
-    /* apply migration before the Newick so clade endpoints get labelled */
+    /* apply migration/introgression before the Newick so clade endpoints get
+     * labelled and the eNewick form is emitted when there are introgressions */
     DiagList me; diag_init(&me);
     int migok = miglist_apply(&t->mig, r, &me);
+    IntroList ic; introlist_copy(&ic, &t->intro);
+    int introok = introlist_apply(&ic, r, &me);
 
     TreeNode **taxa = NULL; int nt = 0, tc = 0;
     treenode_collect_leaves(r->root, &taxa, &nt, &tc);
-    char *body = treenode_to_newick(r->root);
+    char *body = introok && ic.count ? introgress_newick(&ic, r)
+                                     : treenode_to_newick(r->root);
     char *nwk = xasprintf("%s;", body);
     free(body);
 
@@ -409,6 +462,8 @@ static void cmd_block(const NamedTree *t, const char *arg)
     if (*arg == '\0') {                                 /* print to stdout */
         printf("%s\n", block);
         if (migblk) printf("\n%s\n", migblk);
+        if (ic.count)
+            printf("\n(MSC-I network: add 'phiprior = a b' to the control file)\n");
         print_diags(&me, "error");                      /* invalid bands, if any */
         if (!filled) {
             if (!t->imap_path)
@@ -464,6 +519,7 @@ static void cmd_block(const NamedTree *t, const char *arg)
     }
 
     free(taxa); free(nwk); free(block); free(counts); free(migblk); imap_free(m);
+    introlist_free(&ic);
     diag_free(&me);
     resolution_free(r); joinlist_free(&joins); diag_free(&errs); diag_free(&warns);
 }
@@ -539,6 +595,13 @@ static void print_help(void)
 "  imap [FILE]        attach an Imap file (no arg: show; 'clear': detach)\n"
 "  migration SRC->DST add an MSC-M migration band (no arg: list; 'clear';\n"
 "                     'rm N': remove band N)\n"
+"  introgress DONOR->RECIP [phi=P] [src=branch|node] [dst=branch|node]\n"
+"                     add an MSC-I introgression event (no arg: list;\n"
+"                     'clear'; 'rm N': remove event N). Mutually exclusive\n"
+"                     with 'migration' on a given tree.\n"
+"  hybrid H : A, C [phi=P] [src=...] [dst=...]\n"
+"                     add a new hybrid species H with primary parent A and\n"
+"                     secondary parent C; sugar for 'graft H->A' + introgression.\n"
 "  status             taxa count, completeness, and any guidance\n"
 "  taxa               list the tree's tips and the attached imap's species\n"
 "  history            list the commands entered this session\n"
@@ -662,6 +725,11 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
             printf("removed migration band %d\n", idx);
             return;
         }
+        if (t->intro.count) {
+            printf("error: this tree has introgression events (MSC-I); migration and "
+                   "introgression are mutually exclusive — clear them first\n");
+            return;
+        }
         /* add SRC->DST, validated against the current tree */
         MigList tmp; miglist_init(&tmp);
         DiagList pe; diag_init(&pe);
@@ -688,6 +756,155 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
             diag_free(&e); diag_free(&w); diag_free(&me);
         }
         miglist_free(&tmp); diag_free(&pe);
+        return;
+    }
+    if (IS("introgression") || IS("introgress") || IS("intro")) {
+        NamedTree *t = ws_active(ws);
+        if (!*arg) {                                       /* list */
+            if (t->intro.count == 0) { printf("(no introgression events)\n"); return; }
+            DiagList e, w, ie; JoinList j;
+            diag_init(&e); diag_init(&w); diag_init(&ie);
+            Resolution *r = tree_build(t, &j, &e, &w);
+            IntroList ic; introlist_copy(&ic, &t->intro);
+            introlist_apply(&ic, r, &ie);
+            introgress_legend(&ic, r, stdout, treenode_use_color(0, stdout));
+            introlist_free(&ic);
+            resolution_free(r); joinlist_free(&j);
+            diag_free(&e); diag_free(&w); diag_free(&ie);
+            return;
+        }
+        if (strcmp(arg, "clear") == 0) {
+            introlist_free(&t->intro);
+            printf("introgression events cleared\n");
+            return;
+        }
+        if (strncmp(arg, "rm", 2) == 0 && (arg[2] == ' ' || arg[2] == '\t')) {
+            int idx = atoi(arg + 2);
+            if (idx < 1 || idx > t->intro.count) { printf("no introgression event %d\n", idx); return; }
+            free(t->intro.items[idx - 1].donor);
+            free(t->intro.items[idx - 1].recip);
+            free(t->intro.items[idx - 1].label);
+            for (int k = idx - 1; k < t->intro.count - 1; k++)
+                t->intro.items[k] = t->intro.items[k + 1];
+            t->intro.count--;
+            printf("removed introgression event %d\n", idx);
+            return;
+        }
+        if (t->mig.count) {
+            printf("error: this tree has migration bands (MSC-M); migration and "
+                   "introgression are mutually exclusive — clear them first\n");
+            return;
+        }
+        /* parse and validate against the current tree */
+        IntroList tmp; introlist_init(&tmp);
+        DiagList pe; diag_init(&pe);
+        introlist_parse(&tmp, arg, &pe);
+        if (pe.count || tmp.count != 1) {
+            if (pe.count) print_diags(&pe, "error");
+            else printf("usage: introgress DONOR->RECIP [phi=P] [src=branch|node] [dst=branch|node]\n");
+        } else {
+            DiagList e, w, ae; JoinList j;
+            diag_init(&e); diag_init(&w); diag_init(&ae);
+            Resolution *r = tree_build(t, &j, &e, &w);
+            if (!r->root) {
+                printf("the active tree isn't complete yet — finish it first\n");
+            } else if (introlist_find_pair(&t->intro, tmp.items[0].donor, tmp.items[0].recip) >= 0) {
+                printf("an introgression event already exists between '%s' and '%s'\n",
+                       tmp.items[0].donor, tmp.items[0].recip);
+            } else {
+                /* validate against a merged list so the recipient-once rule fires */
+                IntroList merged; introlist_copy(&merged, &t->intro);
+                IntroEvent *src = &tmp.items[0];
+                IntroEvent ev; memset(&ev, 0, sizeof ev);
+                ev.donor = xstrdup(src->donor); ev.recip = xstrdup(src->recip);
+                ev.phi = src->phi; ev.phi2 = src->phi2; ev.bidir = src->bidir;
+                ev.src = src->src; ev.dst = src->dst;
+                ev.label = src->label ? xstrdup(src->label) : NULL;
+                if (merged.count == merged.cap) {
+                    merged.cap = merged.cap ? merged.cap * 2 : 4;
+                    merged.items = xrealloc(merged.items, (size_t)merged.cap * sizeof(IntroEvent));
+                }
+                merged.items[merged.count++] = ev;
+                if (!introlist_apply(&merged, r, &ae)) {
+                    print_diags(&ae, "error");
+                } else {
+                    /* commit a fresh copy of the validated new event into the tree */
+                    if (t->intro.count == t->intro.cap) {
+                        t->intro.cap = t->intro.cap ? t->intro.cap * 2 : 4;
+                        t->intro.items = xrealloc(t->intro.items,
+                                                  (size_t)t->intro.cap * sizeof(IntroEvent));
+                    }
+                    IntroEvent *commit = &t->intro.items[t->intro.count++];
+                    memset(commit, 0, sizeof *commit);
+                    commit->donor = xstrdup(src->donor);
+                    commit->recip = xstrdup(src->recip);
+                    commit->phi = src->phi; commit->phi2 = src->phi2;
+                    commit->bidir = src->bidir;
+                    commit->src = src->src; commit->dst = src->dst;
+                    commit->label = src->label ? xstrdup(src->label) : NULL;
+                    /* re-apply on the live tree to set labels and show_label */
+                    DiagList junk; diag_init(&junk);
+                    IntroList c2; introlist_copy(&c2, &t->intro);
+                    introlist_apply(&c2, r, &junk);
+                    printf("added introgression %s: %s \xe2\x87\x9d %s   phi=%g\n",
+                           c2.items[c2.count - 1].label, src->donor, src->recip, src->phi);
+                    introlist_free(&c2); diag_free(&junk);
+                }
+                introlist_free(&merged);
+            }
+            resolution_free(r); joinlist_free(&j);
+            diag_free(&e); diag_free(&w); diag_free(&ae);
+        }
+        introlist_free(&tmp); diag_free(&pe);
+        return;
+    }
+    if (IS("hybrid")) {
+        /* hybrid H : A, C  phi=...  [src=...] [dst=...]
+         * sugar for: graft H->A ; introgress C->H phi=... */
+        if (!*arg) {
+            printf("usage: hybrid H : PRIMARY, SECONDARY [phi=P] [src=...] [dst=...]\n");
+            return;
+        }
+        char *spec = xstrdup(arg);
+        char *colon = strchr(spec, ':');
+        if (!colon) {
+            printf("usage: hybrid H : PRIMARY, SECONDARY [phi=P] ...\n");
+            free(spec); return;
+        }
+        *colon = '\0';
+        char *H = trim(spec);
+        char *rest = colon + 1;
+        char *comma = strchr(rest, ',');
+        if (!H || !*H || !comma) {
+            printf("usage: hybrid H : PRIMARY, SECONDARY [phi=P] ...\n");
+            free(spec); return;
+        }
+        *comma = '\0';
+        char *primary = trim(rest);
+        char *after = comma + 1;
+        while (*after == ' ' || *after == '\t') after++;  /* start of secondary */
+        char *end = after;
+        while (*end && *end != ' ' && *end != '\t') end++;
+        char saved = *end; *end = '\0';
+        char *secondary = after;                          /* now NUL-terminated */
+        char *opts = end + (saved ? 1 : 0);
+        while (*opts == ' ' || *opts == '\t') opts++;
+        if (!*primary || !*secondary) {
+            printf("usage: hybrid H : PRIMARY, SECONDARY [phi=P] ...\n");
+            free(spec); return;
+        }
+        /* graft H->primary, then introgress secondary->H opts */
+        char *gspec = xasprintf("%s->%s", H, primary);
+        char *ispec = xasprintf("%s->%s%s%s", secondary, H, *opts ? " " : "", opts);
+        char gcmd[256], icmd[512];
+        snprintf(gcmd, sizeof gcmd, "graft %s", gspec);
+        snprintf(icmd, sizeof icmd, "introgress %s", ispec);
+        free(gspec); free(ispec); free(spec);
+        /* drive each via handle_line so the same validation paths apply */
+        char gbuf[256]; snprintf(gbuf, sizeof gbuf, "%s", gcmd);
+        char ibuf[512]; snprintf(ibuf, sizeof ibuf, "%s", icmd);
+        handle_line(ws, hist, gbuf, quit);
+        handle_line(ws, hist, ibuf, quit);
         return;
     }
     if (IS("display") || IS("show") || IS("d")) {
@@ -807,8 +1024,8 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
 
 static const char *const COMMANDS[] = {
     "help", "quit", "exit", "display", "newick", "block", "imap", "migration",
-    "taxa", "status", "trees", "history", "session", "save", "use", "new",
-    "drop", "move", "graft", "prune", "remove", "rotate",
+    "introgress", "hybrid", "taxa", "status", "trees", "history", "session",
+    "save", "use", "new", "drop", "move", "graft", "prune", "remove", "rotate",
     NULL
 };
 
