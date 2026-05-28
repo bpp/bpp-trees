@@ -34,7 +34,8 @@ typedef struct {
     int    bidir;       /* 1 = bidirectional (BPP model D) */
     TauEnd src;         /* placement at the donor end     -> tau-parent of bare ref */
     TauEnd dst;         /* placement at the recipient end -> tau-parent of subtree */
-    char  *label;       /* hybrid node label (assigned by _apply if NULL) */
+    char  *label;       /* hybrid node label (donor side for bidir)  */
+    char  *label2;      /* second hybrid label, bidirectional only   */
 } IntroEvent;
 
 typedef struct {

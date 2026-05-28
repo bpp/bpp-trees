@@ -13,6 +13,7 @@ void introlist_free(IntroList *g)
         free(g->items[i].donor);
         free(g->items[i].recip);
         free(g->items[i].label);
+        free(g->items[i].label2);
     }
     free(g->items);
     introlist_init(g);
@@ -40,7 +41,8 @@ void introlist_copy(IntroList *dst, const IntroList *src)
         e->recip = xstrdup(s->recip);
         e->phi = s->phi; e->phi2 = s->phi2; e->bidir = s->bidir;
         e->src = s->src; e->dst = s->dst;
-        e->label = s->label ? xstrdup(s->label) : NULL;
+        e->label  = s->label  ? xstrdup(s->label)  : NULL;
+        e->label2 = s->label2 ? xstrdup(s->label2) : NULL;
     }
 }
 
@@ -212,9 +214,29 @@ int introlist_apply(IntroList *g, Resolution *r, DiagList *errs)
             ok = 0; continue;
         }
         if (e->bidir) {
-            diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
-                "introgression: bidirectional (model D) is not yet implemented.");
-            ok = 0; continue;
+            /* BPP Model D requires the two hybrids to be siblings sharing a
+             * common parent in the base tree; src/dst placement words are
+             * disallowed (BPP rejects any tau annotations on bidir nodes). */
+            if (e->src != TAU_BRANCH || e->dst != TAU_BRANCH) {
+                Diagnostic *d = diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
+                    "introgression: bidirectional events do not accept 'src'/'dst' "
+                    "placement (BPP model D requires no tau-parent annotations).");
+                diag_set_hint(d, "drop src=/dst= from this <-> event.");
+                ok = 0; continue;
+            }
+            if (!D->parent || D->parent != R->parent) {
+                Diagnostic *d = diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
+                    "introgression: bidirectional events require '%s' and '%s' to "
+                    "be sister branches (share an immediate parent in the tree).",
+                    e->donor, e->recip);
+                diag_set_hint(d, "model D couples two contemporaneous hybrid "
+                                 "lineages; rearrange the tree so they're sisters, "
+                                 "or use two unidirectional events between non-sister "
+                                 "lineages.");
+                ok = 0; continue;
+            }
+            if (e->phi2 <= 0.0 || e->phi2 >= 1.0)
+                e->phi2 = 1.0 - e->phi;   /* sensible default: phi2 = 1 - phi */
         }
         /* a hybrid node has exactly two parents: a node is a recipient once */
         int dup = 0;
@@ -233,18 +255,38 @@ int introlist_apply(IntroList *g, Resolution *r, DiagList *errs)
             while (name_taken(r, g, k, buf));
             e->label = xstrdup(buf);
         }
+        if (e->bidir && !e->label2) {
+            char buf[32];
+            do { snprintf(buf, sizeof buf, "H%d", ++autonum); }
+            while (name_taken(r, g, k, buf));
+            e->label2 = xstrdup(buf);
+        }
         if (!D->is_leaf) D->show_label = 1;   /* donor population must be named */
+        if (e->bidir && !R->is_leaf) R->show_label = 1;
 
-        /* display markers: "H1->" on the donor, "->H1(.30)" on the recipient.
-         * \xe2\x87\x9d is U+21DD (rightwards squiggle), flow donor->recipient. */
-        char pf[16];                          /* ".30" form of phi */
-        snprintf(pf, sizeof pf, "%.2f", e->phi);
-        const char *pp = pf[0] == '0' ? pf + 1 : pf;
-        char dm[48], rm[64];
-        snprintf(dm, sizeof dm, "%s\xe2\x87\x9d", e->label);
-        snprintf(rm, sizeof rm, "\xe2\x87\x9d%s(%s)", e->label, pp);
-        treenode_add_intro(D, dm, k + 1);
-        treenode_add_intro(R, rm, k + 1);
+        if (e->bidir)
+            D->parent->model_d_event = k + 1; /* anchor the coupled Model D form */
+
+        /* display markers. For unidirectional: "H1->" on donor, "->H1(.30)" on
+         * recipient. For bidirectional: "Ha<->Hb(.30/.10)" on both endpoints. */
+        char p1[16], p2[16];
+        snprintf(p1, sizeof p1, "%.2f", e->phi);
+        const char *pp1 = p1[0] == '0' ? p1 + 1 : p1;
+        if (e->bidir) {
+            snprintf(p2, sizeof p2, "%.2f", e->phi2);
+            const char *pp2 = p2[0] == '0' ? p2 + 1 : p2;
+            char m[96];
+            snprintf(m, sizeof m, "%s\xe2\x87\x84%s(%s/%s)",   /* U+21C4 ⇄ */
+                     e->label, e->label2, pp1, pp2);
+            treenode_add_intro(D, m, k + 1);
+            treenode_add_intro(R, m, k + 1);
+        } else {
+            char dm[48], rm[64];
+            snprintf(dm, sizeof dm, "%s\xe2\x87\x9d", e->label);
+            snprintf(rm, sizeof rm, "\xe2\x87\x9d%s(%s)", e->label, pp1);
+            treenode_add_intro(D, dm, k + 1);
+            treenode_add_intro(R, rm, k + 1);
+        }
     }
     return ok;
 }
@@ -260,10 +302,33 @@ static char model_letter(const IntroEvent *e)
     return yes == 2 ? 'A' : yes == 1 ? 'B' : 'C';
 }
 
+/* Emit the bare subtree of n, with recursive children but without applying any
+ * introgression wrapping at n itself (used for the children of a Model D
+ * anchor, which carry their normal subtrees inside the coupled form). */
+static char *emit_subtree(const IntroList *g, TreeNode **dn, TreeNode **rn,
+                          const TreeNode *n);
+
 static char *emit_rec(const IntroList *g, TreeNode **dn, TreeNode **rn,
                       const TreeNode *n)
 {
     char *core;
+    /* Model D anchor: emit the coupled form for its two children A and B. */
+    if (!n->is_leaf && n->model_d_event > 0) {
+        const IntroEvent *e = &g->items[n->model_d_event - 1];
+        TreeNode *D = dn[n->model_d_event - 1];
+        TreeNode *R = rn[n->model_d_event - 1];
+        char *as = emit_subtree(g, dn, rn, D);
+        char *bs = emit_subtree(g, dn, rn, R);
+        /* ((A_sub, Hb[&phi=phi1])Ha, (B_sub, Ha[&phi=phi2])Hb)P
+         *   bare Ha annotation = edge Hb->Ha (phi2 = recip->donor)
+         *   bare Hb annotation = edge Ha->Hb (phi1 = donor->recip)         */
+        core = xasprintf("((%s,%s[&phi=%g])%s,(%s,%s[&phi=%g])%s)%s",
+                         as, e->label2, e->phi,  e->label,
+                         bs, e->label,  e->phi2, e->label2,
+                         n->show_label ? treenode_bpp_name(n) : "");
+        free(as); free(bs);
+        return core;
+    }
     if (n->is_leaf) {
         core = xstrdup(n->name);
     } else {
@@ -278,6 +343,7 @@ static char *emit_rec(const IntroList *g, TreeNode **dn, TreeNode **rn,
     }
     /* recipient: this lineage flows up into a hybrid node (subtree occurrence) */
     for (int k = 0; k < g->count; k++) {
+        if (g->items[k].bidir) continue;
         if (rn[k] == n) {
             char *t = xasprintf("(%s)%s[&tau-parent=%s]",
                                 core, g->items[k].label, tau_str(g->items[k].dst));
@@ -287,6 +353,7 @@ static char *emit_rec(const IntroList *g, TreeNode **dn, TreeNode **rn,
     }
     /* donor: graft the bare hybrid reference (carrying phi) as a sibling */
     for (int k = 0; k < g->count; k++) {
+        if (g->items[k].bidir) continue;
         if (dn[k] == n) {
             char *t = xasprintf("(%s,%s[&phi=%g,&tau-parent=%s])",
                                 core, g->items[k].label, g->items[k].phi,
@@ -295,6 +362,21 @@ static char *emit_rec(const IntroList *g, TreeNode **dn, TreeNode **rn,
         }
     }
     return core;
+}
+
+static char *emit_subtree(const IntroList *g, TreeNode **dn, TreeNode **rn,
+                          const TreeNode *n)
+{
+    if (n->is_leaf) return xstrdup(n->name);
+    char *s = xstrdup("(");
+    for (int i = 0; i < n->n_children; i++) {
+        char *c = emit_rec(g, dn, rn, n->children[i]);
+        char *t = xasprintf("%s%s%s", s, i ? "," : "", c);
+        free(s); free(c); s = t;
+    }
+    char *t = xasprintf("%s)%s", s, n->show_label ? treenode_bpp_name(n) : "");
+    free(s);
+    return t;
 }
 
 char *introgress_newick(const IntroList *g, Resolution *r)
@@ -324,9 +406,13 @@ void introgress_legend(const IntroList *g, Resolution *r, FILE *fp, int color)
         fputs("  ", fp);
         if (color) fputs(treenode_mig_color(k + 1), fp);
         fputs(e->label, fp);
+        if (e->bidir && e->label2) { fputc('/', fp); fputs(e->label2, fp); }
         if (color) fputs(TREENODE_MIG_RESET, fp);
-        /* U+21DD rightwards squiggle arrow */
-        fprintf(fp, ":  %s \xe2\x87\x9d %s   phi=%g  [model %c]\n",
-                dn, rn, e->phi, model_letter(e));
+        if (e->bidir)
+            fprintf(fp, ":  %s \xe2\x87\x84 %s   phi=%g / %g  [model D]\n",
+                    dn, rn, e->phi, e->phi2);
+        else
+            fprintf(fp, ":  %s \xe2\x87\x9d %s   phi=%g  [model %c]\n",
+                    dn, rn, e->phi, model_letter(e));
     }
 }

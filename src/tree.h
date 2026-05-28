@@ -28,6 +28,8 @@ typedef struct TreeNode {
     int             *intro_key;      /* colour key per marker (event number) */
     int              n_intro;
 
+    int              model_d_event;  /* bidir event whose anchor (= P) this is, +1; 0 = none */
+
     int              show_label;     /* emit this internal node's label in Newick */
 } TreeNode;
 

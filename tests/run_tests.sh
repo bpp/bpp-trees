@@ -433,7 +433,44 @@ EOF
     grep -v '^phiprior' "$TMP/lint.ctl" > "$TMP/lint.nophi.ctl"
     lo="$("$LINT" "$TMP/lint.nophi.ctl" 2>&1)"
     chk_contains ti55 "$lo" "'phiprior' is required"
+
+    # Model D bidirectional event between sister branches A and B
+    BD=$("$BIN" --joins 'A+B,A_B+C' --introgression 'A<->B phi=0.3 phi2=0.1' --newick-only)
+    sed -e "s|--BLK--|$BD|" > "$TMP/d.ctl" <<EOF
+seed = 1
+seqfile = x.txt
+Imapfile = x.imap
+jobname = out
+nloci = 100
+species&tree = 3  A  B  C
+                  2  2  2
+  --BLK--
+phiprior = 1 1
+thetaprior = 3 0.004
+tauprior = 3 0.002
+burnin = 1000
+sampfreq = 2
+nsample = 10000
+EOF
+    if "$LINT" "$TMP/d.ctl" 2>&1 | grep -qE '(^|: )error:'; then
+        fail=$((fail+1)); echo "FAIL ti56: bpp-lint rejects a Model D control file"
+    else pass=$((pass+1)); fi
 fi
+
+# Model D: bidirectional between sister tips A and B
+nD="$("$BIN" --joins 'A+B,A_B+C' --introgression 'A<->B phi=0.3 phi2=0.1' --newick-only)"
+chk_contains ti57 "$nD" 'H1'
+chk_contains ti58 "$nD" 'H2'
+chk_contains ti59 "$nD" '&phi=0.3'
+chk_contains ti60 "$nD" '&phi=0.1'
+
+# Model D requires sister branches (A and C are not sisters under A_B+C)
+err="$("$BIN" --joins 'A+B,A_B+C' --introgression 'A<->C' 2>&1)"
+chk_contains ti61 "$err" 'sister branches'
+
+# src=/dst= are rejected on bidirectional events (BPP forbids tau on model D)
+err="$("$BIN" --joins 'A+B,A_B+C' --introgression 'A<->B src=node' 2>&1)"
+chk_contains ti62 "$err" 'do not accept'
 
 # --- Interactive line editor (PTY; requires python3) ---------------------
 if command -v python3 >/dev/null 2>&1; then

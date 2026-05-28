@@ -24,8 +24,8 @@ Note: replace '?' with the number of sequences per species from your Imap file.
 This is **Phase 1: binary trees only**. It covers the full pipeline —
 parsing, order-independent resolution, validation, the `species&tree` block,
 Imap count-filling, and JSON output — but **rejects polytomies** (joins with
-more than two operands) with a clear error. It also supports **MSC-M migration
-bands** (see below). Polytomy support and MSC-I introgression are planned for
+more than two operands) with a clear error. It supports both **MSC-M migration
+bands** and **MSC-I introgression** (extended-Newick networks). Polytomy support is planned for
 later phases.
 
 ## Build
@@ -116,6 +116,7 @@ bpp-tree [options] [JOINS_FILE]
 | `--graft LIST` | Add new tips `NEW->DST` (see below) |
 | `--prune LIST` | Remove tips/subtrees (see below) |
 | `--migration LIST` | MSC-M migration bands `SRC->DST` (see below) |
+| `--introgression LIST` | MSC-I introgression events `DONOR->RECIP` (see below) |
 | `--rotate LIST` | Reverse the children of each named clade (see below) |
 | `--out PREFIX` | Write `PREFIX.nwk` and `PREFIX.stree` |
 | `--newick-only` | Print only the Newick string |
@@ -250,6 +251,66 @@ branches that overlap in time — this is a topology-only tool (no divergence
 times), so temporal overlap is left to BPP/`bpp-lint` to check. (BPP also
 requires `wprior` and `speciestree = 0` when migration is set.)
 
+### Introgression / hybridization (MSC-I)
+
+`--introgression 'DONOR->RECIP'` (interactive: `introgress …`) adds an MSC-I
+introgression event: the recipient branch becomes a **hybrid node** with two
+parents, and the species tree is emitted as an **extended-Newick network**
+with BPP's `&phi=` and `&tau-parent=` annotations. φ is the donor's
+contribution (recipient gets 1−φ from its primary parent). `--introgression`
+and `--migration` are **mutually exclusive** on a tree (the first event placed
+locks the tree's mode; trying the other type raises `MODEL_CONFLICT`).
+
+```
+$ bpp-tree --display --joins 'A+B,A_B+C' --introgression 'C->A phi=0.3'
+Tree:
+  ┬ A_B_C
+  ├─┬ A_B
+  │ ├── A ⇝H1(.30)
+  │ └── B
+  └── C H1⇝
+
+introgressions:
+  H1:  C ⇝ A   phi=0.3  [model A]
+
+Newick: (((A)H1[&tau-parent=yes],B),(C,H1[&phi=0.3,&tau-parent=yes]));
+```
+
+Each event end has a placement word — `branch` (own τ, BPP `tau-parent=yes`)
+or `node` (shares τ, `tau-parent=no`). Default is `branch` on both ends (BPP
+Model A, all parameters present). The BPP model letter is **derived** and
+shown in the legend, not typed:
+
+| `src` | `dst` | model | hint |
+|---|---|---|---|
+| branch | branch | A | both ends have own τ (default) |
+| branch | node | B | ghost-introgression style (see `examples/yeast`) |
+| node | node | C | both ends share τ |
+
+A **hybrid species** with two parents is just `graft H->A` plus an
+introgression from the secondary parent into `H`. The `hybrid` shortcut
+bundles them: `hybrid H : A, C phi=0.4` creates a new tip `H` beside primary
+parent `A` and adds a φ=0.4 reticulation from `C`.
+
+**Bidirectional introgression (Model D)** is a single coupled event between
+**sister branches**: `--introgression 'A<->B phi=0.3 phi2=0.1'`. BPP requires
+the two hybrids to share an immediate parent in the tree, and forbids
+`tau-parent` annotations on either side; bpp-tree enforces both rules. The
+diagram uses `⇄` and the legend shows `[model D]`. Two *non-sister* lineages
+must use two unidirectional events instead.
+
+**Validation:** φ in (0, 1); endpoints are existing branches (tips or
+clades); donor and recipient are **non-nested** (neither is the other's
+ancestor); at most **one** event per taxon pair (regardless of direction);
+each node is a recipient at most once (a hybrid node has exactly two
+parents). All errors are reported together.
+
+**Output:** the eNewick string is emitted in `species&tree`; bpp-tree prints
+a reminder that `phiprior = a b` (Beta prior) is required in the BPP control
+file. JSON output gains an `introgression` array (donor, recipient, φ,
+src/dst). Validated end-to-end against `bpp-lint`: a complete control file
+with a generated MSC-I network lints with no errors for models A, B, C, and D.
+
 ### Rotating nodes
 
 `--rotate` reverses the child order of one or more clades — it changes the
@@ -311,6 +372,8 @@ bpp-tree> quit
 | `display [ascii]` / `newick` / `status` | view the active tree |
 | `imap FILE` | attach an Imap to the active tree (no arg: show; `clear`: detach) |
 | `migration SRC->DST` | add an MSC-M migration band (no arg: list; `clear`; `rm N`) |
+| `introgress DONOR->RECIP [phi=P] [src=…] [dst=…]` | MSC-I event (also `A<->B` for bidir Model D; no arg: list; `clear`; `rm N`) |
+| `hybrid H : A, C [phi=P]` | new hybrid species `H` (sugar for `graft H->A` + `introgress C->H`) |
 | `taxa` | list the tree's tips and the attached imap's species |
 | `block [FILE]` | print the `species&tree` block (stdout, or write to `FILE`) |
 | `block replace FILE` | replace the `species&tree` block inside a BPP control file |
