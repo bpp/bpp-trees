@@ -11,6 +11,7 @@
 #include "block.h"
 #include "migrate.h"
 #include "introgress.h"
+#include "import.h"
 #include "lineedit.h"
 
 #include <ctype.h>
@@ -592,6 +593,8 @@ static void print_help(void)
 "  newick             print the active tree's Newick string\n"
 "  block [FILE]       print the species&tree block (to stdout, or write to FILE)\n"
 "  block replace FILE replace the species&tree block in a BPP control file\n"
+"  read FILE [as NAME]  read a Newick / block / control file as a tree (NAME\n"
+"                     creates or replaces a named tree; else replaces active)\n"
 "  imap [FILE]        attach an Imap file (no arg: show; 'clear': detach)\n"
 "  migration SRC->DST add an MSC-M migration band (no arg: list; 'clear';\n"
 "                     'rm N': remove band N)\n"
@@ -964,6 +967,51 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
         show_status(ws_active(ws));
         return;
     }
+    if (IS("read") || IS("load")) {
+        if (!*arg) { printf("usage: read FILE [as NAME]\n"); return; }
+        /* split off an optional 'as NAME' suffix */
+        char *spec = xstrdup(arg);
+        char *asname = NULL;
+        char *asw = strstr(spec, " as ");
+        if (asw) { *asw = '\0'; asname = trim(asw + 4); }
+        char *path = expand_tilde(trim(spec));
+        DiagList ie; diag_init(&ie);
+        Import imp; import_init(&imp);
+        if (!import_read(path, &imp, &ie)) {
+            print_diags(&ie, "error");
+            import_free(&imp); diag_free(&ie); free(path); free(spec);
+            return;
+        }
+        /* destination: a brand-new tree if 'as NAME' given (or 'main' is the
+         * active and not empty), else replace the active scratch tree. */
+        NamedTree *t = ws_active(ws);
+        const char *dst_name = asname && *asname ? asname : t->name;
+        if (asname && *asname) {
+            int idx = ws_find(ws, dst_name);
+            NamedTree nt; tree_init(&nt, dst_name);
+            if (idx >= 0) { tree_free(&ws->trees[idx]); ws->trees[idx] = nt; ws->active = idx; }
+            else          ws->active = ws_add(ws, nt);
+            t = ws_active(ws);
+        } else {
+            for (int i = 0; i < t->n_ops; i++) free(t->ops[i].spec);
+            t->n_ops = 0;
+            miglist_free(&t->mig);
+            introlist_free(&t->intro);
+        }
+        for (int i = 0; i < imp.n_joins; i++) tree_add_op(t, OP_JOIN, imp.joins[i]);
+        miglist_copy(&t->mig, &imp.mig);
+        introlist_copy(&t->intro, &imp.intro);
+        printf("read '%s' into '%s': %d joins", path, dst_name, imp.n_joins);
+        if (imp.mig.count)   printf(", %d migration band%s",
+                                    imp.mig.count, imp.mig.count == 1 ? "" : "s");
+        if (imp.intro.count) printf(", %d introgression event%s",
+                                    imp.intro.count, imp.intro.count == 1 ? "" : "s");
+        printf("\n");
+        print_diags(&ie, "warning");
+        import_free(&imp); diag_free(&ie); free(path); free(spec);
+        show_status(ws_active(ws));
+        return;
+    }
     if (IS("drop") || IS("delete")) {
         if (!*arg) { printf("usage: drop NAME\n"); return; }
         int idx = ws_find(ws, arg);
@@ -1023,9 +1071,10 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
 /* --- tab completion ----------------------------------------------------- */
 
 static const char *const COMMANDS[] = {
-    "help", "quit", "exit", "display", "newick", "block", "imap", "migration",
-    "introgress", "hybrid", "taxa", "status", "trees", "history", "session",
-    "save", "use", "new", "drop", "move", "graft", "prune", "remove", "rotate",
+    "help", "quit", "exit", "display", "newick", "block", "read", "imap",
+    "migration", "introgress", "hybrid", "taxa", "status", "trees", "history",
+    "session", "save", "use", "new", "drop", "move", "graft", "prune",
+    "remove", "rotate",
     NULL
 };
 
@@ -1127,6 +1176,7 @@ static int repl_complete(const char *buf, int wstart, int wend, char ***out, voi
         int we = b; while (buf[we] && buf[we] != ' ' && buf[we] != '\t') we++;
         char *cmd = xstrndup(buf + b, (size_t)(we - b));
         if (strcmp(cmd, "imap") == 0 || strcmp(cmd, "block") == 0 ||
+            strcmp(cmd, "read") == 0 || strcmp(cmd, "load") == 0 ||
             strcmp(cmd, "session") == 0) {
             add_path_candidates(word, &all, &n, &cap);          /* file paths */
         } else if (strcmp(cmd, "use") == 0 || strcmp(cmd, "switch") == 0 ||

@@ -11,6 +11,7 @@
 #include "block.h"
 #include "migrate.h"
 #include "introgress.h"
+#include "import.h"
 #include "repl.h"
 
 #include <getopt.h>
@@ -39,6 +40,7 @@ typedef struct {
     char *prune_spec;     /* --prune */
     char *migration_spec; /* --migration */
     char *introgression_spec; /* --introgression */
+    char *read_file;      /* --read FILE: Newick / block / control file */
     char *joins_file;     /* positional */
 } Options;
 
@@ -205,6 +207,10 @@ static void usage(FILE *fp)
 "\n"
 "Input:\n"
 "      --joins STRING    Join formula as a ',' or ';' separated string\n"
+"      --read FILE       Read a tree from FILE: a Newick (or extended-Newick\n"
+"                        for MSC-I), a BPP species&tree block, or a control\n"
+"                        file containing one. Migration and introgression\n"
+"                        are recovered from the file too.\n"
 "      --imap FILE       Imap file; fills individual counts automatically\n"
 "\n"
 "Output:\n"
@@ -243,7 +249,7 @@ int main(int argc, char **argv)
     enum { OPT_VERSION = 1000, OPT_JSON, OPT_INDENT, OPT_JOINS, OPT_IMAP,
            OPT_OUT, OPT_NEWICK, OPT_VALIDATE, OPT_QUIET, OPT_ROTATE, OPT_MOVE,
            OPT_GRAFT, OPT_PRUNE, OPT_MIGRATION, OPT_INTROGRESSION,
-           OPT_DISPLAY, OPT_ASCII };
+           OPT_READ, OPT_DISPLAY, OPT_ASCII };
     static struct option lo[] = {
         {"help",        no_argument,       0, 'h'},
         {"interactive", no_argument,       0, 'i'},
@@ -259,6 +265,7 @@ int main(int argc, char **argv)
         {"prune",       required_argument, 0, OPT_PRUNE},
         {"migration",   required_argument, 0, OPT_MIGRATION},
         {"introgression", required_argument, 0, OPT_INTROGRESSION},
+        {"read",        required_argument, 0, OPT_READ},
         {"rotate",      required_argument, 0, OPT_ROTATE},
         {"display",     no_argument,       0, OPT_DISPLAY},
         {"ascii",       no_argument,       0, OPT_ASCII},
@@ -284,6 +291,7 @@ int main(int argc, char **argv)
             case OPT_PRUNE:    o.prune_spec = optarg; break;
             case OPT_MIGRATION: o.migration_spec = optarg; break;
             case OPT_INTROGRESSION: o.introgression_spec = optarg; break;
+            case OPT_READ:     o.read_file = optarg; break;
             case OPT_ROTATE:   o.rotate_spec = optarg; break;
             case OPT_DISPLAY:  o.display = 1; break;
             case OPT_ASCII:    o.ascii = 1; break;
@@ -337,7 +345,14 @@ int main(int argc, char **argv)
     joinlist_init(&joins);
 
     int syntax_errs = 0;
-    if (o.joins_string) {
+    Import imp; import_init(&imp);
+    if (o.read_file) {
+        if (!import_read(o.read_file, &imp, &errs)) syntax_errs = 1;
+        else {
+            for (int i = 0; i < imp.n_joins; i++)
+                parse_joins_string(imp.joins[i], &joins, &errs);
+        }
+    } else if (o.joins_string) {
         syntax_errs = parse_joins_string(o.joins_string, &joins, &errs);
     } else {
         char *text;
@@ -377,6 +392,11 @@ int main(int argc, char **argv)
     int n_joins = 0;
     MigList mig; miglist_init(&mig);
     IntroList intro; introlist_init(&intro);
+    /* --read seeds migration and introgression from the file's own blocks */
+    if (o.read_file) {
+        miglist_copy(&mig, &imp.mig);
+        introlist_copy(&intro, &imp.intro);
+    }
 
     if (syntax_errs == 0) {
         r = resolve_tree(&joins, &errs);
@@ -398,13 +418,15 @@ int main(int argc, char **argv)
         /* migration bands annotate the (final) tree for display and output */
         if (o.migration_spec && !errs.count && r->root) {
             miglist_parse(&mig, o.migration_spec, &errs);
-            if (!errs.count) miglist_apply(&mig, r, &errs);
         }
+        if (mig.count && !errs.count && r->root)
+            miglist_apply(&mig, r, &errs);
         /* introgression events turn the species tree into an eNewick network */
         if (o.introgression_spec && !errs.count && r->root) {
             introlist_parse(&intro, o.introgression_spec, &errs);
-            if (!errs.count) introlist_apply(&intro, r, &errs);
         }
+        if (intro.count && !errs.count && r->root)
+            introlist_apply(&intro, r, &errs);
         /* internal nodes of the resulting tree (includes auto-created ones) */
         if (r->root) n_joins = treenode_count_internal(r->root);
     }
@@ -501,6 +523,7 @@ int main(int argc, char **argv)
 
     miglist_free(&mig);
     introlist_free(&intro);
+    import_free(&imp);
     resolution_free(r);
     joinlist_free(&joins);
     imap_free(imap);

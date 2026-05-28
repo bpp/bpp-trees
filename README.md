@@ -117,6 +117,7 @@ bpp-tree [options] [JOINS_FILE]
 | `--prune LIST` | Remove tips/subtrees (see below) |
 | `--migration LIST` | MSC-M migration bands `SRC->DST` (see below) |
 | `--introgression LIST` | MSC-I introgression events `DONOR->RECIP` (see below) |
+| `--read FILE` | read a tree from a Newick / `species&tree` block / BPP control file (see below) |
 | `--rotate LIST` | Reverse the children of each named clade (see below) |
 | `--out PREFIX` | Write `PREFIX.nwk` and `PREFIX.stree` |
 | `--newick-only` | Print only the Newick string |
@@ -326,6 +327,40 @@ $ bpp-tree --quiet --newick-only --joins 'A+B,C+D' --rotate 'A_B_C_D'  # ((C,D),
 A tip in the list is ignored (it has no children to rotate); an identifier
 that names no clade is an error.
 
+### Reading a tree from a file
+
+`--read FILE` reads a tree from a file *instead of* the join formula. The
+file may be any of:
+
+- a plain **Newick** string `((A,B),C);` — tree only;
+- an **extended Newick** with `&phi=` / `&tau-parent=` annotations — bpp-tree
+  recovers the MSC-I introgression events from the doubled hybrid labels;
+- a BPP **`species&tree` block** (counts and Newick together, the form
+  written by `--out`/`block FILE`) — migration bands inside the same file are
+  picked up too;
+- a full BPP **control file** containing one of the above — bpp-tree extracts
+  the `species&tree` block (and any `migration = N` block) and ignores the
+  rest. (`phiprior`, `thetaprior`, etc. are left for BPP/bpp-lint.)
+
+The intended workflow is round-trip:
+
+```
+$ bpp-tree --joins 'A+B,A_B+C' --introgression 'C->A phi=0.3' --out my
+                                                  # writes my.nwk + my.stree
+$ bpp-tree --read my.stree --display              # read it straight back
+```
+
+The full tree state is preserved: topology, child order, internal-clade
+labels used by migration/introgression endpoints, MSC-I φ and per-end
+`tau-parent` placement (Models A/B/C), bidirectional Model D events (the
+coupled two-node form is detected and recovered as one bidir event), and
+the migration `= N` block. Reading is **idempotent** for every model — write
+→ read → write produces a byte-identical Newick string.
+
+In the REPL, `read FILE` replaces the active tree from a file, and
+`read FILE as NAME` creates (or replaces) a named tree from one — exactly
+the inverse of `block FILE`.
+
 **Exit codes:** `0` valid · `1` errors in the join formula · `2` system error.
 
 ## Interactive mode
@@ -377,6 +412,7 @@ bpp-tree> quit
 | `taxa` | list the tree's tips and the attached imap's species |
 | `block [FILE]` | print the `species&tree` block (stdout, or write to `FILE`) |
 | `block replace FILE` | replace the `species&tree` block inside a BPP control file |
+| `read FILE [as NAME]` | read a Newick / `species&tree` block / control file as a tree |
 | `trees` | list trees in memory (active marked `*`) |
 | `save NAME` | save a copy of the active tree as `NAME` |
 | `use NAME` | make `NAME` the active tree |

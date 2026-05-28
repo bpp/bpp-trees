@@ -472,6 +472,62 @@ chk_contains ti61 "$err" 'sister branches'
 err="$("$BIN" --joins 'A+B,A_B+C' --introgression 'A<->B src=node' 2>&1)"
 chk_contains ti62 "$err" 'do not accept'
 
+# --- Import / round-trip ------------------------------------------------
+
+# CLI: --read with a plain Newick file
+echo '((A,B),(C,D));' > "$TMP/p.nwk"
+out="$("$BIN" --read "$TMP/p.nwk" --newick-only)"
+chk_contains ti63 "$out" '((A,B),(C,D));'
+
+# CLI: --read a species&tree+migration block (the .stree --out writes)
+"$BIN" --joins 'A+B,C+D,A_B+C_D' --migration 'A->C,B->D' --out "$TMP/m" --quiet
+out="$("$BIN" --read "$TMP/m.stree" --display --ascii 2>&1)"
+chk_contains ti64 "$out" 'M1:  A → C'
+chk_contains ti65 "$out" 'M2:  B → D'
+
+# CLI: --read a full BPP control file (extracts species&tree + migration)
+cat > "$TMP/ctl.ctl" <<EOF
+seed = 1
+species&tree = 4  A  B  C  D
+                  2  2  2  2
+  ((A,B),(C,D));
+migration = 1
+  A  C
+phiprior = 1 1
+EOF
+out="$("$BIN" --read "$TMP/ctl.ctl" --newick-only)"
+chk_contains ti66 "$out" '((A,B),(C,D));'
+
+# MSC-I round-trip: write the eNewick, read it back, expect byte identity
+nwk0="$("$BIN" --joins 'A+B,A_B+C' --introgression 'C->A phi=0.3' --newick-only)"
+echo "$nwk0" > "$TMP/i.nwk"
+nwk1="$("$BIN" --read "$TMP/i.nwk" --newick-only)"
+if [[ "$nwk0" = "$nwk1" ]]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL ti67: MSC-I round-trip not idempotent"
+     echo "  out: $nwk0"; echo "  in:  $nwk1"; fi
+
+# Model D round-trip: emit the coupled form, read it, recover bidir, re-emit
+nwkD0="$("$BIN" --joins 'A+B,A_B+C' --introgression 'A<->B phi=0.3 phi2=0.1' --newick-only)"
+echo "$nwkD0" > "$TMP/d.nwk"
+nwkD1="$("$BIN" --read "$TMP/d.nwk" --newick-only)"
+if [[ "$nwkD0" = "$nwkD1" ]]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL ti68: Model D round-trip not idempotent"
+     echo "  out: $nwkD0"; echo "  in:  $nwkD1"; fi
+
+# REPL: 'read FILE as NAME' creates a tree from a file
+"$BIN" --joins 'A+B,C+D,A_B+C_D' --migration 'A->C' --out "$TMP/r" --quiet
+ri="$(printf 'read %s/r.stree as restored\nuse restored\nnewick\nmigration\nquit\n' "$TMP" | "$BIN" -i 2>&1)"
+chk_contains ti69 "$ri" "into 'restored'"
+chk_contains ti70 "$ri" '((A,B),(C,D));'
+chk_contains ti71 "$ri" 'M1:  A → C'
+
+# REPL: export -> wipe -> read cycle (the user's stated workflow)
+ex="$(printf 'A+B\nC+D\nA_B+C_D\nintrogress A_B->C_D phi=0.2\nblock %s/exp.stree\nquit\n' "$TMP" | "$BIN" -i 2>&1)"
+chk_contains ti72 "$ex" "wrote species&tree block"
+back="$(printf 'read %s/exp.stree\nnewick\nintrogression\nquit\n' "$TMP" | "$BIN" -i 2>&1)"
+chk_contains ti73 "$back" '&phi=0.2'
+chk_contains ti74 "$back" "A_B $(printf '\xe2\x87\x9d') C_D"   # legend: donor ⇝ recipient
+
 # --- Interactive line editor (PTY; requires python3) ---------------------
 if command -v python3 >/dev/null 2>&1; then
     if python3 - "$BIN" "$FIX/samples.imap" <<'PY'
