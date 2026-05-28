@@ -528,6 +528,63 @@ back="$(printf 'read %s/exp.stree\nnewick\nintrogression\nquit\n' "$TMP" | "$BIN
 chk_contains ti73 "$back" '&phi=0.2'
 chk_contains ti74 "$back" "A_B $(printf '\xe2\x87\x9d') C_D"   # legend: donor ⇝ recipient
 
+# --- Real BPP example files (yeast + anopheles MSci, from the BPP repo) ---
+
+# Yeast MSci: Model B, Sbay basal -- the bare H has tau-parent=yes (primary
+# parent at root), the labelled (Sbay)H has tau-parent=no (introgression
+# source at the (Skud,...) clade). bpp-tree must SWAP to recover Sbay basal.
+SQ=$(printf '\xe2\x87\x9d')                                 # U+21DD ⇝
+yo="$("$BIN" --read "$FIX/bpp/yeast-msci.stree" --display --ascii 2>&1)"
+chk_contains ti75 "$yo" 'Sbay_Scer_Skud_Smik_Spar'          # Sbay basal: in root clade label
+chk_contains ti76 "$yo" "Skud $SQ Sbay"                     # donor Skud, recipient Sbay
+chk_contains ti77 "$yo" 'model B'
+
+# Anopheles MSci: TWO coupled Model B events (h: R->Q, f: A->b clade)
+ao="$("$BIN" --read "$FIX/bpp/anopheles-msci.stree" --display --ascii 2>&1)"
+chk_contains ti78 "$ao" "R $SQ Q"
+chk_contains ti79 "$ao" "A $SQ b"
+chk_contains ti80 "$ao" 'model B'
+
+# Re-emit is idempotent for both files
+n1=$("$BIN" --read "$FIX/bpp/yeast-msci.stree" --newick-only)
+echo "$n1" > "$TMP/y.nwk"; n2=$("$BIN" --read "$TMP/y.nwk" --newick-only)
+if [[ "$n1" = "$n2" ]]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL ti81: yeast MSci re-read not idempotent"; fi
+
+n1=$("$BIN" --read "$FIX/bpp/anopheles-msci.stree" --newick-only)
+echo "$n1" > "$TMP/a.nwk"; n2=$("$BIN" --read "$TMP/a.nwk" --newick-only)
+if [[ "$n1" = "$n2" ]]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL ti82: anopheles MSci re-read not idempotent"; fi
+
+# And bpp-lint accepts the re-emitted forms (semantic equivalence to originals)
+if [[ -x "$LINT" ]]; then
+    for f in "$FIX/bpp/yeast-msci.stree" "$FIX/bpp/anopheles-msci.stree"; do
+        nwk=$("$BIN" --read "$f" --newick-only)
+        species=$(awk '/species&tree/{$1=$2=$3=$4="";print;exit}' "$f")
+        n=$(echo "$species" | wc -w | tr -d ' ')
+        counts=$(awk -v n=$n 'BEGIN{for(i=0;i<n;i++)printf "1 ";print ""}')
+        cat > "$TMP/lt.ctl" <<EOF
+seed = 1
+seqfile = x
+Imapfile = x.imap
+jobname = out
+nloci = 100
+species&tree = $n $species
+                  $counts
+  $nwk
+phiprior = 1 1
+thetaprior = 3 0.004
+tauprior = 3 0.002
+burnin = 1000
+sampfreq = 2
+nsample = 10000
+EOF
+        if "$LINT" "$TMP/lt.ctl" 2>&1 | grep -qE '(^|: )error:'; then
+            fail=$((fail+1)); echo "FAIL: bpp-lint rejects re-emit of $(basename "$f")"
+        else pass=$((pass+1)); fi
+    done
+fi
+
 # --- Interactive line editor (PTY; requires python3) ---------------------
 if command -v python3 >/dev/null 2>&1; then
     if python3 - "$BIN" "$FIX/samples.imap" <<'PY'

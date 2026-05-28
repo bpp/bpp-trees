@@ -305,16 +305,31 @@ static int recover_introgressions(NwkNode *root, Import *im, DiagList *errs)
         char *def_tau = anno_get(defn->annotation, "tau-parent");
         char *ref_tau = anno_get(refn->annotation, "tau-parent");
 
+        /* Per BPP semantics, the species-tree parent (where the recipient lives
+         * in the base tree) is the one with `tau-parent=yes` (its own tau).
+         * The labelled occurrence carries the subtree but it might be at the
+         * SECONDARY parent's location -- as in the yeast example, where the
+         * labelled (Sbay)H is at D (tau-parent=no) and the bare H is at R
+         * (tau-parent=yes), so Sbay is basal in the base tree, not Skud-sister.
+         * When that's so we swap: move the recipient subtree to refp. */
+        int swap = (ref_tau && strcasecmp(ref_tau, "yes") == 0 &&
+                    def_tau && strcasecmp(def_tau, "no")  == 0);
+
         IntroEvent ev; memset(&ev, 0, sizeof ev);
         ev.phi   = phi_s ? atof(phi_s) : 0.5;
         ev.phi2  = -1.0;
-        ev.src   = (ref_tau && strcasecmp(ref_tau, "no") == 0) ? TAU_NODE : TAU_BRANCH;
-        ev.dst   = (def_tau && strcasecmp(def_tau, "no") == 0) ? TAU_NODE : TAU_BRANCH;
         ev.label = xstrdup(labels[i]);
-        /* recipient: the underlying lineage carried by the labelled hybrid
-         * occurrence -- the first child of defn that isn't itself a bare
-         * reference to another hybrid (which is what makes Model D's defn
-         * have two children rather than one). */
+        /* In our overlay-emit, src tau is on the bare ref (donor's location).
+         * Standard: bare = refn (under refp); src = ref_tau.  After swap:
+         * donor stays at defp (def_tau drives src); recipient ends up at refp
+         * (ref_tau drives dst). */
+        ev.src = ((swap ? def_tau : ref_tau)
+                  && strcasecmp(swap ? def_tau : ref_tau, "no") == 0) ? TAU_NODE : TAU_BRANCH;
+        ev.dst = ((swap ? ref_tau : def_tau)
+                  && strcasecmp(swap ? ref_tau : def_tau, "no") == 0) ? TAU_NODE : TAU_BRANCH;
+
+        /* recipient = the labelled occurrence's `real' subtree (skipping any
+         * bare-hybrid children -- the (B)Y / (X) pieces in Model D). */
         NwkNode *recip_n = NULL;
         for (int k = 0; k < defn->n_children; k++) {
             NwkNode *c = defn->children[k];
@@ -325,13 +340,17 @@ static int recover_introgressions(NwkNode *root, Import *im, DiagList *errs)
             }
             if (!bare_hybrid) { recip_n = c; break; }
         }
-        if (!recip_n) recip_n = defn;          /* defensive */
+        if (!recip_n) recip_n = defn;
         ev.recip = node_name(recip_n);
-        /* donor: the non-bare-ref sibling of the bare reference under refp */
+        /* donor = sibling of the hybrid-bearing child at the SECONDARY parent.
+         * Standard: secondary = refp, hybrid-bearing = refn.
+         * Swap:     secondary = defp, hybrid-bearing = defn. */
+        NwkNode *sec_p = swap ? defp : refp;
+        NwkNode *sec_h = swap ? defn : refn;
         NwkNode *donor_n = NULL;
-        for (int k = 0; k < refp->n_children; k++) {
-            if (refp->children[k] == refn) continue;
-            donor_n = refp->children[k]; break;
+        for (int k = 0; k < sec_p->n_children; k++) {
+            if (sec_p->children[k] == sec_h) continue;
+            donor_n = sec_p->children[k]; break;
         }
         ev.donor = donor_n ? node_name(donor_n) : xstrdup("?");
 
@@ -342,29 +361,54 @@ static int recover_introgressions(NwkNode *root, Import *im, DiagList *errs)
         }
         im->intro.items[im->intro.count++] = ev;
 
-        /* Rewrite the tree to its base form: keep the definition (strip the
-         * hybrid wrapper); remove the bare reference and its enclosing pair. */
+        /* Rewrite the tree to its base form. */
         if (refp && defp) {
-            /* The defn is wrapped as (real_subtree)label. Replace defn with its
-             * single real child, dropping the hybrid wrap. */
-            if (defn->n_children == 1) {
-                NwkNode *child = defn->children[0];
-                /* splice child in place of defn under defp */
-                for (int k = 0; k < defp->n_children; k++) {
-                    if (defp->children[k] == defn) {
-                        defp->children[k] = child;
-                        defn->n_children = 0; free(defn->children); defn->children = NULL;
-                        nwk_free(defn);
+            if (swap) {
+                /* The species-tree parent is refp. Move recip_n there (in
+                 * place of refn), then drop defn from defp -- defn is gone, the
+                 * recipient subtree now lives at refp. */
+                for (int k = 0; k < defn->n_children; k++) {
+                    if (defn->children[k] == recip_n) {
+                        for (int q = k; q < defn->n_children - 1; q++)
+                            defn->children[q] = defn->children[q + 1];
+                        defn->n_children--;
                         break;
                     }
                 }
+                for (int k = 0; k < refp->n_children; k++) {
+                    if (refp->children[k] == refn) {
+                        refp->children[k] = recip_n;
+                        break;
+                    }
+                }
+                nwk_free(refn);
+                for (int k = 0; k < defp->n_children; k++) {
+                    if (defp->children[k] == defn) {
+                        for (int q = k; q < defp->n_children - 1; q++)
+                            defp->children[q] = defp->children[q + 1];
+                        defp->n_children--;
+                        break;
+                    }
+                }
+                nwk_free(defn);
             } else {
-                strip_annotation(defn);            /* multi-child defn: just strip annotation */
+                /* Standard: keep defn's location, strip the hybrid wrap; remove
+                 * the bare reference and its enclosing pair. */
+                if (defn->n_children == 1) {
+                    NwkNode *child = defn->children[0];
+                    for (int k = 0; k < defp->n_children; k++) {
+                        if (defp->children[k] == defn) {
+                            defp->children[k] = child;
+                            defn->n_children = 0; free(defn->children); defn->children = NULL;
+                            nwk_free(defn);
+                            break;
+                        }
+                    }
+                } else {
+                    strip_annotation(defn);
+                }
+                drop_child(refp, refn);
             }
-            /* refp pattern: (donor_subtree, bare_ref) -- drop the bare ref so refp
-             * keeps only the donor subtree. If refp ends up with one child, splice
-             * it through (suppress the now-unary node). */
-            drop_child(refp, refn);
         }
         free(phi_s); free(def_tau); free(ref_tau);
     }
