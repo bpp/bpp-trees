@@ -7,6 +7,9 @@
 *.nwk
 *.stree
 
+# but keep checked-in test fixtures
+!tests/fixtures/**
+
 # interactive session image
 .bpptree
 

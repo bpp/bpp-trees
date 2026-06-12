@@ -1,0 +1,3 @@
+species&tree = 5 Scer Spar Smik Skud Sbay
+                 1    1    1    1    1
+                 ((((Scer,Spar),Smik),(Skud,(Sbay)H[&phi=0.5,&tau-parent=no])),H[&tau-parent=yes])R;

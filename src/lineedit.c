@@ -11,6 +11,13 @@
 
 #define LE_MAX 4096
 
+/* Echo to the terminal, deliberately ignoring the result: these writes are
+ * cosmetic redraws, and there is nothing to recover if the tty write fails. */
+static void le_emit(const char *s, size_t n)
+{
+    if (write(STDOUT_FILENO, s, n) < 0) return;
+}
+
 void hist_push(History *h, const char *line)
 {
     if (h->n > 0 && strcmp(h->items[h->n - 1], line) == 0) return;  /* no dup */
@@ -45,20 +52,22 @@ static void refresh(const char *prompt, const char *buf, size_t pos)
 {
     char seq[64];
     size_t plen = strlen(prompt);
-    write(STDOUT_FILENO, "\r", 1);
-    write(STDOUT_FILENO, prompt, plen);
-    write(STDOUT_FILENO, buf, strlen(buf));
-    write(STDOUT_FILENO, "\x1b[0K", 4);                 /* clear to end of line */
+    le_emit("\r", 1);
+    le_emit(prompt, plen);
+    le_emit(buf, strlen(buf));
+    le_emit("\x1b[0K", 4);                              /* clear to end of line */
     size_t col = plen + pos;
-    if (col > 0) { int n = snprintf(seq, sizeof seq, "\r\x1b[%zuC", col); write(STDOUT_FILENO, seq, (size_t)n); }
-    else         write(STDOUT_FILENO, "\r", 1);
+    if (col > 0) { int n = snprintf(seq, sizeof seq, "\r\x1b[%zuC", col); le_emit(seq, (size_t)n); }
+    else         le_emit("\r", 1);
 }
 
 static void buf_set(char *buf, size_t *pos, size_t *len, const char *s)
 {
-    strncpy(buf, s, LE_MAX - 1);
-    buf[LE_MAX - 1] = '\0';
-    *len = *pos = strlen(buf);
+    size_t n = strlen(s);
+    if (n > LE_MAX - 1) n = LE_MAX - 1;
+    memcpy(buf, s, n);
+    buf[n] = '\0';
+    *len = *pos = n;
 }
 
 static int is_token_char(int c)
@@ -100,13 +109,13 @@ static char *edit_raw(const char *prompt, History *h,
         if (read(STDIN_FILENO, &c, 1) <= 0) return NULL;            /* EOF / error */
 
         if (c == '\r' || c == '\n') {
-            write(STDOUT_FILENO, "\n", 1);
+            le_emit("\n", 1);
             return xstrdup(buf);
         } else if (c == 3) {            /* Ctrl-C: cancel the current line */
-            write(STDOUT_FILENO, "^C\n", 3);
+            le_emit("^C\n", 3);
             return xstrdup("");
         } else if (c == 4) {            /* Ctrl-D: EOF if empty, else delete-forward */
-            if (len == 0) { write(STDOUT_FILENO, "\n", 1); return NULL; }
+            if (len == 0) { le_emit("\n", 1); return NULL; }
             if (pos < len) { memmove(buf + pos, buf + pos + 1, len - pos); buf[--len] = '\0'; }
         } else if (c == 127 || c == 8) {   /* Backspace */
             if (pos > 0) { memmove(buf + pos - 1, buf + pos, len - pos + 1); pos--; len--; }
@@ -138,12 +147,12 @@ static char *edit_raw(const char *prompt, History *h,
                         apply_completion(buf, &pos, &len, wstart, pref, 0);
                         free(pref);
                     } else {                               /* list the candidates */
-                        write(STDOUT_FILENO, "\n", 1);
+                        le_emit("\n", 1);
                         for (int i = 0; i < nc; i++) {
-                            write(STDOUT_FILENO, cand[i], strlen(cand[i]));
-                            write(STDOUT_FILENO, "  ", 2);
+                            le_emit(cand[i], strlen(cand[i]));
+                            le_emit("  ", 2);
                         }
-                        write(STDOUT_FILENO, "\n", 1);
+                        le_emit("\n", 1);
                     }
                 }
                 for (int i = 0; i < nc; i++) free(cand[i]);
@@ -156,7 +165,7 @@ static char *edit_raw(const char *prompt, History *h,
             if (a == '[') {
                 if (b == 'A') {                 /* Up: older history */
                     if (hidx > 0) {
-                        if (hidx == h->n) { strncpy(stash, buf, LE_MAX - 1); stash[LE_MAX-1] = '\0'; }
+                        if (hidx == h->n) { size_t sn = strlen(buf); memcpy(stash, buf, sn + 1); }
                         hidx--;
                         buf_set(buf, &pos, &len, h->items[hidx]);
                     }
