@@ -91,14 +91,15 @@ static char *species_newick(Resolution *r, const IntroList *intro)
     return newick_string(r->root);
 }
 
-/* The re-emitted species&tree Newick. A stacked MSC-I network imported as a
- * graph (the flat event list cannot hold it) is serialised directly from the
- * graph -- faithful and idempotent by construction. Everything else is built
- * from the resolved tree and its event list. */
-static char *result_newick(const Import *imp, Resolution *r, const IntroList *intro)
+/* The re-emitted species&tree Newick. A stacked MSC-I network carried as a
+ * graph (imported, or constructed from join+introgression input -- the flat
+ * event list cannot hold it) is serialised directly from the graph: faithful
+ * and idempotent by construction. Everything else is built from the resolved
+ * tree and its event list. */
+static char *result_newick(const Graph *netgraph, Resolution *r, const IntroList *intro)
 {
-    if (imp->graph_only && imp->graph) {
-        char *body = graph_to_newick(imp->graph);
+    if (netgraph) {
+        char *body = graph_to_newick(netgraph);
         char *s = xasprintf("%s;", body);
         free(body);
         return s;
@@ -242,9 +243,11 @@ static void usage(FILE *fp)
 "      --migration LIST  MSC-M migration bands 'SRC->DST' (',' or ';' separated):\n"
 "                        gene flow from branch SRC to branch DST.\n"
 "      --introgression LIST  MSC-I introgression events (',' or ';' separated),\n"
-"                        each 'DONOR->RECIP [phi=P] [src=branch|node]\n"
+"                        each 'DONOR->RECIP [= NAME] [phi=P] [src=branch|node]\n"
 "                        [dst=branch|node]'. Emits an extended-Newick network.\n"
-"                        Mutually exclusive with --migration.\n"
+"                        Repeating a recipient stacks pulses on one lineage;\n"
+"                        an endpoint may name a prior event. '= NAME' names the\n"
+"                        event (auto H1,H2,..). Mutually exclusive with --migration.\n"
 "      --rotate LIST     Reverse the children of each named clade (',' or ';'\n"
 "                        separated; a leaf-set label like 'A_B' or an explicit\n"
 "                        label). Tips are ignored. Changes order, not topology.\n"
@@ -407,6 +410,7 @@ int main(int argc, char **argv)
     int n_joins = 0;
     MigList mig; miglist_init(&mig);
     IntroList intro; introlist_init(&intro);
+    Graph *cgraph = NULL;          /* network built from join+introgression input */
     /* --read seeds migration and introgression from the file's own blocks */
     if (o.read_file) {
         miglist_copy(&mig, &imp.mig);
@@ -440,8 +444,18 @@ int main(int argc, char **argv)
         if (o.introgression_spec && !errs.count && r->root) {
             introlist_parse(&intro, o.introgression_spec, &errs);
         }
-        if (intro.count && !errs.count && r->root)
+        /* A spec that stacks (a recipient used twice, or an endpoint naming a
+         * prior event) is built as a graph; the flat introlist_apply cannot
+         * represent it. The display list is then re-derived from the graph. */
+        if (o.introgression_spec && !errs.count && r->root && introlist_needs_graph(&intro)) {
+            cgraph = graph_construct(r, &intro, &errs);
+            if (cgraph) {
+                introlist_free(&intro); introlist_init(&intro);
+                introlist_from_graph(&intro, cgraph, r);
+            }
+        } else if (intro.count && !errs.count && r->root) {
             introlist_apply(&intro, r, &errs);
+        }
         /* a stacked network imported as a graph derives its legend/markers
          * (and JSON/note) directly from the graph -- it cannot go through the
          * flat-list introlist_apply (a lineage hosts several events). */
@@ -462,7 +476,7 @@ int main(int argc, char **argv)
         char *newick = NULL, *block = NULL; int filled = 0; int *counts = NULL;
         if (!errs.count && r && r->root) {
             treenode_collect_leaves(r->root, &taxa, &n_taxa, &tcap);
-            newick = result_newick(&imp, r, &intro);
+            newick = result_newick(imp.graph_only ? imp.graph : cgraph, r, &intro);
             block = species_block(taxa, n_taxa, newick, imap, &filled, &counts);
         }
         emit_json(stdout, &o, r, taxa, n_taxa, n_joins, newick, block,
@@ -477,7 +491,7 @@ int main(int argc, char **argv)
         if (!errs.count && r && r->root) {
             TreeNode **taxa = NULL; int n_taxa = 0, tcap = 0;
             treenode_collect_leaves(r->root, &taxa, &n_taxa, &tcap);
-            char *newick = result_newick(&imp, r, &intro);
+            char *newick = result_newick(imp.graph_only ? imp.graph : cgraph, r, &intro);
             int filled = 0; int *counts = NULL;
             char *block = species_block(taxa, n_taxa, newick, imap, &filled, &counts);
             char *migblk = mig.count ? migration_block(&mig, r) : NULL;
@@ -543,6 +557,7 @@ int main(int argc, char **argv)
 
     miglist_free(&mig);
     introlist_free(&intro);
+    graph_free(cgraph);
     import_free(&imp);
     resolution_free(r);
     joinlist_free(&joins);

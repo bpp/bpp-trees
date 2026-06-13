@@ -29,6 +29,23 @@ static void gn_add_child(GraphNode *p, GraphNode *c)
     p->children[p->n_children++] = c;
 }
 
+Graph *graph_alloc(void)
+{
+    return xcalloc(1, sizeof(Graph));
+}
+
+GraphNode *graph_new_node(Graph *g, const char *label)
+{
+    GraphNode *n = gn_alloc(g);
+    n->label = label ? xstrdup(label) : NULL;
+    return n;
+}
+
+void graph_add_child(GraphNode *parent, GraphNode *child)
+{
+    gn_add_child(parent, child);
+}
+
 void graph_free(Graph *g)
 {
     if (!g) return;

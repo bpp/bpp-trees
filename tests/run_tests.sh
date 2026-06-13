@@ -630,6 +630,45 @@ chk_contains ti108 "$d3" 'phi=0.02'                # VC->CEU phi
 chk_contains ti109 "$d3" "NEAN ${SQ}hn1"           # NEAN bears a recipient marker
 chk_contains ti110 "$d3" "MOD hn1${SQ}"            # MOD bears a donor marker
 
+# --- CONSTRUCTING stacked networks (step 4) ------------------------------
+# Users can now BUILD a stacked network from a base tree + ordered introgress
+# lines with '= NAME'. Two pulses share the recipient lineage (MOD->NEAN twice),
+# which introlist_apply rejects but the graph constructor handles: insert a
+# hybrid immediately above the recipient (latest innermost) and an anonymous
+# donor-attachment above the donor.
+CBASE='ALTAI+VC=NEAN,VINDIJA+CHAG=VC,YRI+CEU=MOD,NEAN+MOD=HN,HN+DENISOVA'
+CINTRO='MOD->NEAN=hn1 phi=0.05 src=node dst=branch, MOD->NEAN=hn2 phi=0.005 src=node dst=branch, VC->CEU=nh phi=0.02 src=node dst=branch'
+exit_is ti111 0 --joins "$CBASE" --introgression "$CINTRO" --newick-only
+cn="$("$BIN" --joins "$CBASE" --introgression "$CINTRO" --newick-only 2>/dev/null)"
+chk_contains ti112 "$cn" ')hn2[&tau-parent=yes])hn1[&tau-parent=yes]'  # stacked recipient
+chk_contains ti113 "$cn" 'hn2[&phi=0.005,&tau-parent=no]'             # inner donor pulse
+chk_contains ti114 "$cn" 'hn1[&phi=0.05,&tau-parent=no]'             # outer donor pulse
+echo "$cn" > "$TMP/cn.nwk"; cn2=$("$BIN" --read "$TMP/cn.nwk" --newick-only 2>/dev/null)
+if [[ "$cn" = "$cn2" ]]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL ti115: constructed stacked net not idempotent"; fi
+# the donor bare ref precedes its subtree on each attachment (BPP phi pairing)
+chk_contains ti116 "$cn" '(hn1[&phi=0.05,&tau-parent=no],(hn2[&phi=0.005'
+cd3="$("$BIN" --joins "$CBASE" --introgression "$CINTRO" --display --ascii 2>&1)"
+chk_contains ti117 "$cd3" "MOD $SQ NEAN"
+chk_contains ti118 "$cd3" "VC $SQ CEU"
+
+# '= NAME' is optional -- events auto-name H1, H2, ...
+ca="$("$BIN" --joins "$CBASE" --introgression 'MOD->NEAN phi=0.05, MOD->NEAN phi=0.005' --display --ascii 2>&1)"
+chk_contains ti119 "$ca" 'H1:  MOD'
+chk_contains ti120 "$ca" 'H2:  MOD'
+
+# Referencing a prior event's name as an endpoint attaches above its hybrid
+# node (order override): hn1 sits ABOVE hn2 on the recipient lineage.
+co="$("$BIN" --joins "$CBASE" --introgression 'MOD->NEAN=hn2 phi=0.005 src=node dst=branch, MOD->hn2=hn1 phi=0.05 src=node dst=branch' --newick-only 2>/dev/null)"
+chk_contains ti121 "$co" ')hn2[&tau-parent=yes])hn1[&tau-parent=yes]'
+
+# Name validation: no collision with a tip/clade, no '_'.
+chk_contains ti122 "$("$BIN" --joins "$CBASE" --introgression 'MOD->NEAN=NEAN phi=0.05, MOD->NEAN=h2 phi=0.01' 2>&1)" 'already a tip, clade, or event'
+chk_contains ti123 "$("$BIN" --joins "$CBASE" --introgression 'MOD->NEAN=h_1 phi=0.05, MOD->NEAN=h2 phi=0.01' 2>&1)" "must not contain '_'"
+
+# A reciprocal pair is still rejected (not stacking; use a <-> event).
+chk_contains ti124 "$("$BIN" --joins 'A+B,A_B+C' --introgression 'C->A ; A->C' 2>&1)" 'more than one event'
+
 # And bpp-lint accepts the re-emitted forms (semantic equivalence to originals)
 if [[ -x "$LINT" ]]; then
     for f in "$FIX/bpp/yeast-msci.stree" "$FIX/bpp/anopheles-msci.stree" "$FIX/bpp/ghost-msci.stree" \

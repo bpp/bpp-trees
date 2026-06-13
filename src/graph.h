@@ -55,6 +55,18 @@ Graph *graph_from_newick(const NwkNode *root, DiagList *errs);
 
 void   graph_free(Graph *g);
 
+/* --- construction primitives (used to build a graph imperatively) -------- */
+
+/* An empty graph (no nodes). Set its root and add nodes via graph_new_node. */
+Graph     *graph_alloc(void);
+
+/* Allocate a node owned by g (freed by graph_free). label is copied, or NULL
+ * for an anonymous internal node. */
+GraphNode *graph_new_node(Graph *g, const char *label);
+
+/* Append child to parent's child list (does not set parent pointers). */
+void       graph_add_child(GraphNode *parent, GraphNode *child);
+
 /* 1 if the network is representable by the legacy flat event list: no hybrid
  * sits on another hybrid's lineage (no stacking). 0 means at least one
  * reticulation stacks on another -- only the graph can represent it. A graph

@@ -64,6 +64,19 @@ void introlist_parse(IntroList *g, const char *spec, DiagList *errs);
  * Sets show_label on clade endpoints. Returns 1 if all events are valid. */
 int  introlist_apply(IntroList *g, Resolution *r, DiagList *errs);
 
+/* 1 if `g` describes a stacked network the flat event list cannot hold: a
+ * recipient appears more than once, or an endpoint names a prior event. Such a
+ * spec must be built with graph_construct, not introlist_apply. */
+int  introlist_needs_graph(const IntroList *g);
+
+/* Build the network graph from a base tree and an ordered event list, applying
+ * each event by inserting a hybrid node immediately above the recipient and an
+ * anonymous donor-attachment above the donor (latest event innermost = stacking).
+ * Endpoints resolve to a tip, a clade (resolution_find), or a prior event's
+ * name. Returns NULL on an unresolved/invalid event (diagnostic appended); the
+ * caller then reports errors. Caller frees with graph_free. */
+Graph *graph_construct(const Resolution *r, const IntroList *events, DiagList *errs);
+
 /* Populate `g` (assumed empty) from a stacked network carried as a graph, and
  * mark the resolved base tree for display: one event per reticulation with the
  * donor/recipient base-tree populations, displayed phi, and model letter (via

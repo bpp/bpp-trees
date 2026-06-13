@@ -96,7 +96,7 @@ void introlist_parse(IntroList *g, const char *spec, DiagList *errs)
         char *donor = trim(piece);
         char *rest  = arrow + alen;
         while (*rest == ' ' || *rest == '\t') rest++;
-        size_t rlen = strcspn(rest, " \t");
+        size_t rlen = strcspn(rest, " \t=");   /* '=' begins an optional '= NAME' */
         char *recip = xstrndup(rest, rlen);
         char *opts  = rest + rlen;
 
@@ -113,6 +113,15 @@ void introlist_parse(IntroList *g, const char *spec, DiagList *errs)
 
         int bad = 0;
         char *o = opts;
+        /* optional '= NAME' names the event (synonym for label=NAME), mirroring
+         * the join syntax 'A+B = pan'. */
+        while (*o == ' ' || *o == '\t') o++;
+        if (*o == '=') {
+            o++;
+            while (*o == ' ' || *o == '\t') o++;
+            size_t l = strcspn(o, " \t");
+            if (l) { free(ev.label); ev.label = xstrndup(o, l); o += l; }
+        }
         while (*o && !bad) {
             while (*o == ' ' || *o == '\t') o++;
             if (!*o) break;
@@ -150,7 +159,15 @@ void introlist_parse(IntroList *g, const char *spec, DiagList *errs)
             free(tok);
         }
 
-        if (!bad && introlist_find_pair(g, ev.donor, ev.recip) >= 0) {
+        /* A reciprocal pair (A->B and B->A) is not stacking -- it is an error
+         * (or belongs in a bidirectional '<->' event). Same-direction repeats
+         * ARE stacking (two pulses on one lineage) and are built by the graph
+         * path, so they are allowed through here. */
+        int reciprocal = 0;
+        for (int i = 0; i < g->count && !reciprocal; i++)
+            if (strcmp(g->items[i].donor, ev.recip) == 0 &&
+                strcmp(g->items[i].recip, ev.donor) == 0) reciprocal = 1;
+        if (!bad && reciprocal) {
             diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
                 "introgression: more than one event between '%s' and '%s'.",
                 ev.donor, ev.recip);
@@ -289,6 +306,168 @@ int introlist_apply(IntroList *g, Resolution *r, DiagList *errs)
         }
     }
     return ok;
+}
+
+/* --- graph construction (stacked networks) ------------------------------ */
+
+typedef struct { const TreeNode *tn; GraphNode *gn; } NodeMap;
+
+static GraphNode *mirror_tree(Graph *g, const TreeNode *tn, GraphNode *parent,
+                              NodeMap **map, int *nmap, int *cap)
+{
+    const char *label = tn->is_leaf ? tn->name : tn->explicit_label;
+    GraphNode *n = graph_new_node(g, label);
+    n->primary_parent = parent;
+    if (*nmap == *cap) {
+        *cap = *cap ? *cap * 2 : 32;
+        *map = xrealloc(*map, (size_t)*cap * sizeof(NodeMap));
+    }
+    (*map)[*nmap].tn = tn; (*map)[(*nmap)++].gn = n;
+    for (int i = 0; i < tn->n_children; i++)
+        graph_add_child(n, mirror_tree(g, tn->children[i], n, map, nmap, cap));
+    return n;
+}
+
+static GraphNode *map_lookup(const NodeMap *map, int n, const TreeNode *tn)
+{
+    for (int i = 0; i < n; i++) if (map[i].tn == tn) return map[i].gn;
+    return NULL;
+}
+
+static int name_used(char **names, int n, const Resolution *r, const char *s)
+{
+    if (resolution_find(r, s)) return 1;
+    for (int i = 0; i < n; i++) if (strcmp(names[i], s) == 0) return 1;
+    return 0;
+}
+
+static void splice_child(GraphNode *parent, GraphNode *old, GraphNode *new)
+{
+    for (int i = 0; i < parent->n_children; i++)
+        if (parent->children[i] == old) { parent->children[i] = new; return; }
+}
+
+int introlist_needs_graph(const IntroList *g)
+{
+    for (int i = 0; i < g->count; i++)
+        for (int j = 0; j < i; j++) {
+            const char *lab = g->items[j].label;
+            if (lab && (strcmp(g->items[i].donor, lab) == 0 ||
+                        strcmp(g->items[i].recip, lab) == 0))
+                return 1;                              /* endpoint names a prior event */
+            if (strcmp(g->items[i].recip, g->items[j].recip) == 0)
+                return 1;                              /* recipient repeated -> stacking */
+        }
+    return 0;
+}
+
+Graph *graph_construct(const Resolution *r, const IntroList *events, DiagList *errs)
+{
+    if (!r || !r->root) return NULL;
+    Graph *g = graph_alloc();
+    NodeMap *map = NULL; int nmap = 0, mcap = 0;
+    g->root = mirror_tree(g, r->root, NULL, &map, &nmap, &mcap);
+
+    char **names = NULL; GraphNode **enode = NULL; int ne = 0;   /* event name -> hybrid */
+    int ok = 1, autonum = 0;
+
+    for (int k = 0; k < events->count && ok; k++) {
+        const IntroEvent *e = &events->items[k];
+
+        /* resolve endpoints: a prior event's name first, else the base tree */
+        GraphNode *R = NULL, *D = NULL;
+        for (int i = 0; i < ne; i++) {
+            if (strcmp(names[i], e->recip) == 0) R = enode[i];
+            if (strcmp(names[i], e->donor) == 0) D = enode[i];
+        }
+        if (!R) { TreeNode *t = resolution_find(r, e->recip); if (t) R = map_lookup(map, nmap, t); }
+        if (!D) { TreeNode *t = resolution_find(r, e->donor); if (t) D = map_lookup(map, nmap, t); }
+        if (!R || !D) {
+            diag_add(errs, DIAG_INTROGRESSION_UNKNOWN, -1,
+                "introgression: %s '%s' is not in the tree.",
+                R ? "donor" : "recipient", R ? e->donor : e->recip);
+            ok = 0; break;
+        }
+        if (R == D) {
+            diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
+                "introgression: donor and recipient are the same ('%s').", e->recip);
+            ok = 0; break;
+        }
+        if (!R->primary_parent || !D->primary_parent) {
+            diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
+                "introgression: cannot attach an event at the root.");
+            ok = 0; break;
+        }
+        for (GraphNode *a = R; a && ok; a = a->primary_parent)
+            if (a == D) { diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
+                "introgression: '%s' is an ancestor of '%s'; they do not coexist.",
+                e->donor, e->recip); ok = 0; }
+        for (GraphNode *a = D; a && ok; a = a->primary_parent)
+            if (a == R) { diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
+                "introgression: '%s' is an ancestor of '%s'; they do not coexist.",
+                e->recip, e->donor); ok = 0; }
+        if (!ok) break;
+        if (e->phi <= 0.0 || e->phi >= 1.0) {
+            diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
+                "introgression: phi=%g is out of range (0 < phi < 1).", e->phi);
+            ok = 0; break;
+        }
+
+        char *name = NULL;
+        if (e->label) {
+            if (strchr(e->label, '_')) {
+                diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
+                    "introgression: name '%s' must not contain '_'.", e->label);
+                ok = 0; break;
+            }
+            if (name_used(names, ne, r, e->label)) {
+                diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
+                    "introgression: name '%s' is already a tip, clade, or event.", e->label);
+                ok = 0; break;
+            }
+            name = xstrdup(e->label);
+        } else {
+            char buf[32];
+            do { snprintf(buf, sizeof buf, "H%d", ++autonum); }
+            while (name_used(names, ne, r, buf));
+            name = xstrdup(buf);
+        }
+
+        /* insert hybrid H immediately above the recipient (latest innermost) */
+        GraphNode *pR = R->primary_parent;
+        GraphNode *H = graph_new_node(g, name);
+        H->is_hybrid = 1;
+        H->phi = e->phi;
+        H->tau_primary   = (e->dst == TAU_BRANCH);   /* recipient (native) edge */
+        H->tau_secondary = (e->src == TAU_BRANCH);   /* donor edge */
+        H->primary_parent = pR;
+        graph_add_child(H, R);
+        R->primary_parent = H;
+        splice_child(pR, R, H);
+
+        /* insert an anonymous donor-attachment immediately above the donor. The
+         * bare hybrid reference is added as the FIRST child: BPP pairs the phi
+         * of stacked hybrids by child order, and rejects ("phi do not sum to 1")
+         * a donor attachment whose bare ref trails its subtree. */
+        GraphNode *pD = D->primary_parent;
+        GraphNode *Dn = graph_new_node(g, NULL);
+        Dn->primary_parent = pD;
+        splice_child(pD, D, Dn);
+        graph_add_child(Dn, H);
+        H->secondary_parent = Dn;
+        graph_add_child(Dn, D);
+        D->primary_parent = Dn;
+
+        names = xrealloc(names, (size_t)(ne + 1) * sizeof *names);
+        enode = xrealloc(enode, (size_t)(ne + 1) * sizeof *enode);
+        names[ne] = name; enode[ne] = H; ne++;
+        g->n_hybrids++;
+    }
+
+    for (int i = 0; i < ne; i++) free(names[i]);
+    free(names); free(enode); free(map);
+    if (!ok) { graph_free(g); return NULL; }
+    return g;
 }
 
 void introlist_from_graph(IntroList *g, const Graph *gr, Resolution *r)
