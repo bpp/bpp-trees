@@ -289,3 +289,99 @@ char *graph_base_newick(const Graph *g)
     if (!g || !g->root) return NULL;
     return emit_base(g->root);
 }
+
+/* --- event projection (display / legend) --------------------------------- */
+
+/* The base-tree node that represents n: descend through hybrid nodes and
+ * unary donor-attachment nodes (whose bare ref was dropped) to the surviving
+ * clade or tip. */
+static const GraphNode *project(const GraphNode *n)
+{
+    for (;;) {
+        const GraphNode *only = NULL; int nk = 0;
+        for (int i = 0; i < n->n_children; i++) {
+            const GraphNode *c = n->children[i];
+            if (c->is_hybrid && c->secondary_parent == n) continue;  /* secondary edge */
+            only = c; nk++;
+        }
+        if (nk == 0) return n;                    /* tip */
+        if (n->is_hybrid || nk == 1) { n = only; continue; }  /* suppressed node */
+        return n;                                 /* a real internal clade */
+    }
+}
+
+/* Primary-tree leaf names under n (skipping secondary edges), for an implicit
+ * '_'-joined label when a clade has no explicit one. */
+static void base_leaves(const GraphNode *n, char ***out, int *cnt, int *cap)
+{
+    int has_kid = 0;
+    for (int i = 0; i < n->n_children; i++) {
+        const GraphNode *c = n->children[i];
+        if (c->is_hybrid && c->secondary_parent == n) continue;
+        has_kid = 1;
+        base_leaves(c, out, cnt, cap);
+    }
+    if (!has_kid) {
+        if (*cnt == *cap) { *cap = *cap ? *cap * 2 : 8;
+                            *out = xrealloc(*out, (size_t)*cap * sizeof(char *)); }
+        (*out)[(*cnt)++] = n->label ? n->label : (char *)"?";
+    }
+}
+
+static char *project_name(const GraphNode *n)
+{
+    const GraphNode *p = project(n);
+    if (p->label && *p->label) return xstrdup(p->label);
+    char **lv = NULL; int c = 0, cap = 0;
+    base_leaves(p, &lv, &c, &cap);
+    qsort(lv, (size_t)c, sizeof(char *), cmp_str);
+    size_t len = 1; for (int i = 0; i < c; i++) len += strlen(lv[i]) + 1;
+    char *s = xmalloc(len); s[0] = '\0';
+    for (int i = 0; i < c; i++) { if (i) strcat(s, "_"); strcat(s, lv[i]); }
+    free(lv);
+    return s;
+}
+
+GraphEvent *graph_events(const Graph *g, int *n_out)
+{
+    int n = g ? g->n_hybrids : 0;
+    *n_out = n;
+    if (!n) return NULL;
+    GraphEvent *ev = xcalloc((size_t)n, sizeof *ev);
+    int k = 0;
+    for (int i = 0; i < g->n_nodes && k < n; i++) {
+        const GraphNode *H = g->nodes[i];
+        if (!H->is_hybrid) continue;
+
+        /* recipient = H's (single) primary child */
+        const GraphNode *recip = NULL;
+        for (int j = 0; j < H->n_children; j++) {
+            const GraphNode *c = H->children[j];
+            if (c->is_hybrid && c->secondary_parent == H) continue;
+            recip = c; break;
+        }
+        /* donor edge is the tau-parent=no side; donor node is its other child */
+        const GraphNode *dp = !H->tau_secondary ? H->secondary_parent
+                            : !H->tau_primary   ? H->primary_parent
+                                                : H->secondary_parent; /* A: pick 2ndary */
+        const GraphNode *donor = NULL;
+        if (dp) for (int j = 0; j < dp->n_children; j++)
+            if (dp->children[j] != H) { donor = dp->children[j]; break; }
+
+        ev[k].name  = xstrdup(H->label ? H->label : "?");
+        ev[k].recip = recip ? project_name(recip) : xstrdup("?");
+        ev[k].donor = donor ? project_name(donor) : xstrdup("?");
+        ev[k].phi   = !H->tau_secondary ? H->phi : 1.0 - H->phi;
+        int yes = H->tau_primary + H->tau_secondary;
+        ev[k].model = yes == 2 ? 'A' : yes == 1 ? 'B' : 'C';
+        k++;
+    }
+    return ev;
+}
+
+void graph_events_free(GraphEvent *ev, int n)
+{
+    if (!ev) return;
+    for (int i = 0; i < n; i++) { free(ev[i].name); free(ev[i].donor); free(ev[i].recip); }
+    free(ev);
+}

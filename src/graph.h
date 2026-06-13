@@ -68,6 +68,24 @@ int    graph_is_simple(const Graph *g);
  * and display. Caller frees. */
 char  *graph_base_newick(const Graph *g);
 
+/* One reticulation reduced to base-tree populations, for display/legend. The
+ * donor is the population on the tau-parent=no (introgression) side; the
+ * recipient is the hybrid lineage; phi is the donor's contribution along that
+ * edge; model is the BPP letter from the two tau flags. */
+typedef struct {
+    char  *name;    /* hybrid / event label (owned) */
+    char  *donor;   /* base-tree donor population name (owned) */
+    char  *recip;   /* base-tree recipient population name (owned) */
+    double phi;     /* donor's contribution as displayed, in (0,1) */
+    char   model;   /* 'A' | 'B' | 'C' */
+} GraphEvent;
+
+/* One GraphEvent per hybrid (count = g->n_hybrids), in node order. Names are
+ * projected to the surviving base-tree population (a label, or the implicit
+ * '_'-joined leaf set when unlabelled). Caller frees with graph_events_free. */
+GraphEvent *graph_events(const Graph *g, int *n_out);
+void        graph_events_free(GraphEvent *ev, int n);
+
 /* Serialise the graph back to extended Newick (no trailing ';'). phi is written
  * on the donor-side bare reference as the donor's contribution; each hybrid's
  * primary occurrence carries its subtree and tau-parent flag. Deterministic and

@@ -442,6 +442,11 @@ int main(int argc, char **argv)
         }
         if (intro.count && !errs.count && r->root)
             introlist_apply(&intro, r, &errs);
+        /* a stacked network imported as a graph derives its legend/markers
+         * (and JSON/note) directly from the graph -- it cannot go through the
+         * flat-list introlist_apply (a lineage hosts several events). */
+        if (imp.graph_only && !errs.count && r && r->root)
+            introlist_from_graph(&intro, imp.graph, r);
         /* internal nodes of the resulting tree (includes auto-created ones) */
         if (r->root) n_joins = treenode_count_internal(r->root);
     }

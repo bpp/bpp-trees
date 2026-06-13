@@ -291,6 +291,41 @@ int introlist_apply(IntroList *g, Resolution *r, DiagList *errs)
     return ok;
 }
 
+void introlist_from_graph(IntroList *g, const Graph *gr, Resolution *r)
+{
+    int n = 0;
+    GraphEvent *ev = graph_events(gr, &n);
+    for (int k = 0; k < n; k++) {
+        IntroEvent *e = introlist_grow(g);
+        e->donor = xstrdup(ev[k].donor);
+        e->recip = xstrdup(ev[k].recip);
+        e->label = xstrdup(ev[k].name);
+        e->phi   = ev[k].phi;
+        e->phi2  = -1.0;
+        e->bidir = 0;
+        /* src/dst chosen so model_letter() reproduces the graph's model: a
+         * TAU_BRANCH ('own tau') counts as one 'yes'. A=2, B=1, C=0. */
+        int yes = ev[k].model == 'A' ? 2 : ev[k].model == 'B' ? 1 : 0;
+        e->src = yes >= 1 ? TAU_BRANCH : TAU_NODE;
+        e->dst = yes >= 2 ? TAU_BRANCH : TAU_NODE;
+
+        /* mark the resolved base tree (a population may be donor/recipient of
+         * more than one event -- stacked pulses -- so just append markers). */
+        TreeNode *D = resolution_find(r, e->donor);
+        TreeNode *R = resolution_find(r, e->recip);
+        if (D && !D->is_leaf) D->show_label = 1;
+        char p1[16];
+        snprintf(p1, sizeof p1, "%.2f", e->phi);
+        const char *pp = p1[0] == '0' ? p1 + 1 : p1;
+        char dm[48], rm[64];
+        snprintf(dm, sizeof dm, "%s\xe2\x87\x9d", e->label);
+        snprintf(rm, sizeof rm, "\xe2\x87\x9d%s(%s)", e->label, pp);
+        if (D) treenode_add_intro(D, dm, k + 1);
+        if (R) treenode_add_intro(R, rm, k + 1);
+    }
+    graph_events_free(ev, n);
+}
+
 /* --- extended-Newick emission ------------------------------------------ */
 
 static const char *tau_str(TauEnd e) { return e == TAU_NODE ? "no" : "yes"; }

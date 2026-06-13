@@ -21,6 +21,7 @@
 
 #include "resolver.h"
 #include "diag.h"
+#include "graph.h"
 
 #include <stdio.h>
 
@@ -62,6 +63,14 @@ void introlist_parse(IntroList *g, const char *spec, DiagList *errs);
  * once) and assign auto hybrid labels (H1, H2, ...) avoiding name clashes.
  * Sets show_label on clade endpoints. Returns 1 if all events are valid. */
 int  introlist_apply(IntroList *g, Resolution *r, DiagList *errs);
+
+/* Populate `g` (assumed empty) from a stacked network carried as a graph, and
+ * mark the resolved base tree for display: one event per reticulation with the
+ * donor/recipient base-tree populations, displayed phi, and model letter (via
+ * src/dst). Re-emission still comes from the graph itself; this drives the
+ * legend, markers, JSON and the MSC-I note. Skips the strict one-recipient and
+ * model-D validation in introlist_apply (a lineage may host several events). */
+void introlist_from_graph(IntroList *g, const Graph *gr, Resolution *r);
 
 /* Extended-Newick for the network (no trailing ';'); call after a successful
  * introlist_apply. Returns NULL when there are no events. Caller frees. */

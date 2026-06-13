@@ -617,6 +617,19 @@ b3="$("$BIN" --read "$FIX/bpp/neander-m3.stree" 2>/dev/null)"
 chk_contains ti101 "$b3" 'species&tree = 6'
 chk_contains ti102 "$b3" 'hn2[&phi=0.005'
 
+# Display + legend for the stacked network are DERIVED FROM THE GRAPH (step 3).
+# The two MOD->NEAN pulses share one lineage -- NEAN is the recipient of both
+# and MOD the donor of both -- which the flat event list could never show.
+d3="$("$BIN" --read "$FIX/bpp/neander-m3.stree" --display --ascii 2>&1)"
+chk_contains ti103 "$d3" "MOD $SQ NEAN"            # both pulses MOD -> NEAN
+chk_contains ti104 "$d3" "VC $SQ CEU"              # third event VC -> CEU
+chk_contains ti105 "$d3" 'hn1:  MOD'               # legend names each event
+chk_contains ti106 "$d3" 'hn2:  MOD'
+chk_contains ti107 "$d3" 'phi=0.005'               # inner pulse phi in legend
+chk_contains ti108 "$d3" 'phi=0.02'                # VC->CEU phi
+chk_contains ti109 "$d3" "NEAN ${SQ}hn1"           # NEAN bears a recipient marker
+chk_contains ti110 "$d3" "MOD hn1${SQ}"            # MOD bears a donor marker
+
 # And bpp-lint accepts the re-emitted forms (semantic equivalence to originals)
 if [[ -x "$LINT" ]]; then
     for f in "$FIX/bpp/yeast-msci.stree" "$FIX/bpp/anopheles-msci.stree" "$FIX/bpp/ghost-msci.stree" \
