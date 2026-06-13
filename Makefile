@@ -29,8 +29,13 @@ src/%.o: src/%.c
 debug:
 	$(CC) $(DEBUG_FLAGS) -o $(BIN) $(SRC) $(LDLIBS)
 
-test: $(BIN)
+# Standalone harness for the network graph (used by the test suite).
+GRAPH_TEST_OBJ = src/newick.o src/graph.o src/util.o src/diag.o
+tests/graph_roundtrip: tests/graph_roundtrip.c $(GRAPH_TEST_OBJ)
+	$(CC) $(CFLAGS) -o $@ $< $(GRAPH_TEST_OBJ) $(LDLIBS)
+
+test: $(BIN) tests/graph_roundtrip
 	@./tests/run_tests.sh
 
 clean:
-	rm -f $(OBJ) $(BIN)
+	rm -f $(OBJ) $(BIN) tests/graph_roundtrip

@@ -629,6 +629,36 @@ EOF
     done
 fi
 
+# --- Network graph: faithful eNewick build + idempotent re-serialise -----
+# The graph model (src/graph.c) is the faithful replacement for the heuristic
+# recover_introgressions. tests/graph_roundtrip builds the graph from each
+# fixture, re-serialises it, and re-parses+re-serialises the result; exit 0
+# means the graph built and "parse -> graph -> string" is byte-stable. Unlike
+# the legacy IntroList path, the graph represents STACKED introgressions, so it
+# reads the M3 network (two MOD->NEAN pulses on one lineage) that the old model
+# could not. Idempotency here is the structural oracle for "robust to every
+# eNewick"; bpp's own reading is checked separately where a bpp binary exists.
+GRT="$ROOT/tests/graph_roundtrip"
+if [[ -x "$GRT" ]]; then
+    for f in yeast-msci anopheles-msci ghost-msci neander-m1 neander-m2 neander-m3; do
+        if "$GRT" "$FIX/bpp/$f.stree" >/dev/null 2>&1; then pass=$((pass+1))
+        else fail=$((fail+1)); echo "FAIL gt-$f: graph build/round-trip (idempotency) failed"; fi
+    done
+    # M3 structure: the recipient (NEAN) lineage stacks hn2 then hn1; both donor
+    # pulses ride MOD's lineage (mod_pre2/mod_pre1); VC->CEU is the third event.
+    m3o="$("$GRT" "$FIX/bpp/neander-m3.stree" 2>/dev/null)"
+    chk_contains gt-m3a "$m3o" ')hn2[&tau-parent=yes])hn1[&tau-parent=yes]'  # stacked recipient
+    chk_contains gt-m3b "$m3o" 'hn2[&phi=0.005,&tau-parent=no]'             # inner donor pulse
+    chk_contains gt-m3c "$m3o" 'hn1[&phi=0.05,&tau-parent=no]'              # outer donor pulse
+    chk_contains gt-m3d "$m3o" '(CEU)nh_hyb[&tau-parent=yes]'               # VC->CEU recipient
+    # Canonicalisation: phi sitting on a recipient-primary occurrence is moved to
+    # the donor-side bare ref and complemented (ghost 0.97 -> 0.03 on GHOST side).
+    go="$("$GRT" "$FIX/bpp/ghost-msci.stree" 2>/dev/null)"
+    chk_contains gt-ghost "$go" 'H[&phi=0.03,&tau-parent=no]'
+else
+    echo "skip gt: tests/graph_roundtrip not built (run 'make test')"
+fi
+
 # --- Interactive line editor (PTY; requires python3) ---------------------
 if command -v python3 >/dev/null 2>&1; then
     if python3 - "$BIN" "$FIX/samples.imap" <<'PY'

@@ -1,5 +1,6 @@
 # build artifacts
 /bpp-tree
+/tests/graph_roundtrip
 *.o
 *.dSYM/
 
