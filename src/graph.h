@@ -55,6 +55,19 @@ Graph *graph_from_newick(const NwkNode *root, DiagList *errs);
 
 void   graph_free(Graph *g);
 
+/* 1 if the network is representable by the legacy flat event list: no hybrid
+ * sits on another hybrid's lineage (no stacking). 0 means at least one
+ * reticulation stacks on another -- only the graph can represent it. A graph
+ * with no hybrids is trivially simple. */
+int    graph_is_simple(const Graph *g);
+
+/* Serialise the BASE species tree (no trailing ';'): drop every secondary
+ * (introgression) edge and suppress each hybrid node and each now-unary
+ * donor-attachment node, keeping the real internal clade labels. This is the
+ * tree the join formulas describe; parse it back to recover joins for editing
+ * and display. Caller frees. */
+char  *graph_base_newick(const Graph *g);
+
 /* Serialise the graph back to extended Newick (no trailing ';'). phi is written
  * on the donor-side bare reference as the donor's contribution; each hybrid's
  * primary occurrence carries its subtree and tau-parent flag. Deterministic and

@@ -24,6 +24,7 @@ void import_free(Import *im)
     free(im->joins); free(im->rotates); free(im->newick_in);
     miglist_free(&im->mig);
     introlist_free(&im->intro);
+    graph_free(im->graph);
     memset(im, 0, sizeof *im);
 }
 
@@ -516,6 +517,36 @@ int import_read(const char *path, Import *im, DiagList *errs)
     NwkNode *root = nwk_parse_root(nwk, errs);
     free(nwk);
     if (!root) { return 0; }
+
+    /* Build the faithful network graph first. A STACKED network (a reticulation
+     * on another reticulation's lineage, e.g. M3) cannot be expressed as a flat
+     * list of branch-keyed events, so the heuristic recovery below would mangle
+     * it. Carry such a network as the graph: derive the base tree from it and
+     * re-emit by serialising the graph (see graph_only in import.h). Simple
+     * networks, model D (graph returns NULL), and plain trees keep the existing
+     * recovery path unchanged -- build on a scratch diag so its notes don't
+     * leak into a run we then fall back from. */
+    DiagList scratch; diag_init(&scratch);
+    Graph *g = graph_from_newick(root, &scratch);
+    diag_free(&scratch);
+    if (g && !graph_is_simple(g)) {
+        im->graph = g;
+        im->graph_only = 1;
+        im->had_msci = 1;
+        char *base = graph_base_newick(g);
+        NwkNode *broot = base ? nwk_parse_root(base, errs) : NULL;
+        free(base);
+        nwk_free(root);
+        if (!broot) {
+            diag_add(errs, DIAG_SYNTAX, -1, "imported network: base tree is empty.");
+            return 0;
+        }
+        broot = suppress_unary(broot);
+        walk(broot, im);
+        nwk_free(broot);
+        return 1;
+    }
+    graph_free(g);
 
     im->had_msci = recover_introgressions(root, im, errs);
     root = suppress_unary(root);

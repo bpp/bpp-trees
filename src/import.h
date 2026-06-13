@@ -14,6 +14,7 @@
 #include "diag.h"
 #include "migrate.h"
 #include "introgress.h"
+#include "graph.h"
 
 typedef struct {
     char    **joins;      /* join formula strings (one per internal node), owned */
@@ -23,6 +24,12 @@ typedef struct {
     int       had_msci;   /* 1 if the input contained &phi=/&tau-parent= */
     MigList   mig;        /* migration bands (empty if none) */
     IntroList intro;      /* introgression events (empty if none) */
+    /* A stacked MSC-I network the flat IntroList cannot represent (e.g. M3) is
+     * carried as the graph instead: `graph` is the faithful network and
+     * `graph_only` is set; `joins` describe its base tree, `intro` is empty,
+     * and re-emission serialises `graph` directly. NULL/0 for everything else. */
+    Graph    *graph;
+    int       graph_only;
 } Import;
 
 void import_init(Import *im);

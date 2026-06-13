@@ -243,3 +243,49 @@ char *graph_to_newick(const Graph *g)
     if (!g || !g->root) return NULL;
     return emit_node(g->root);
 }
+
+/* --- base-tree projection ------------------------------------------------ */
+
+int graph_is_simple(const Graph *g)
+{
+    if (!g) return 1;
+    for (int i = 0; i < g->n_nodes; i++) {
+        const GraphNode *n = g->nodes[i];
+        if (!n->is_hybrid) continue;
+        if ((n->primary_parent   && n->primary_parent->is_hybrid) ||
+            (n->secondary_parent && n->secondary_parent->is_hybrid))
+            return 0;                            /* a reticulation stacks on another */
+    }
+    return 1;
+}
+
+/* Emit n's base subtree: skip the secondary (donor-ref) children, then suppress
+ * this node if it is a hybrid or has collapsed to a single child (a donor
+ * attachment whose bare ref was dropped). */
+static char *emit_base(const GraphNode *n)
+{
+    const GraphNode *kids[64]; int nk = 0;
+    for (int i = 0; i < n->n_children && nk < 64; i++) {
+        const GraphNode *c = n->children[i];
+        if (c->is_hybrid && c->secondary_parent == n) continue;  /* drop secondary edge */
+        kids[nk++] = c;
+    }
+    if (nk == 0) return xstrdup(n->label ? n->label : "");       /* leaf */
+    if (n->is_hybrid || nk == 1) return emit_base(kids[0]);      /* suppress this node */
+
+    char *core = xstrdup("(");
+    for (int i = 0; i < nk; i++) {
+        char *piece = emit_base(kids[i]);
+        char *t = xasprintf("%s%s%s", core, i ? "," : "", piece);
+        free(core); free(piece); core = t;
+    }
+    char *t = xasprintf("%s)%s", core, n->label ? n->label : "");
+    free(core);
+    return t;
+}
+
+char *graph_base_newick(const Graph *g)
+{
+    if (!g || !g->root) return NULL;
+    return emit_base(g->root);
+}

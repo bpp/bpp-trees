@@ -91,6 +91,21 @@ static char *species_newick(Resolution *r, const IntroList *intro)
     return newick_string(r->root);
 }
 
+/* The re-emitted species&tree Newick. A stacked MSC-I network imported as a
+ * graph (the flat event list cannot hold it) is serialised directly from the
+ * graph -- faithful and idempotent by construction. Everything else is built
+ * from the resolved tree and its event list. */
+static char *result_newick(const Import *imp, Resolution *r, const IntroList *intro)
+{
+    if (imp->graph_only && imp->graph) {
+        char *body = graph_to_newick(imp->graph);
+        char *s = xasprintf("%s;", body);
+        free(body);
+        return s;
+    }
+    return species_newick(r, intro);
+}
+
 static void print_diag(FILE *fp, const Diagnostic *d, const char *kind)
 {
     if (d->line_no >= 0)
@@ -442,7 +457,7 @@ int main(int argc, char **argv)
         char *newick = NULL, *block = NULL; int filled = 0; int *counts = NULL;
         if (!errs.count && r && r->root) {
             treenode_collect_leaves(r->root, &taxa, &n_taxa, &tcap);
-            newick = species_newick(r, &intro);
+            newick = result_newick(&imp, r, &intro);
             block = species_block(taxa, n_taxa, newick, imap, &filled, &counts);
         }
         emit_json(stdout, &o, r, taxa, n_taxa, n_joins, newick, block,
@@ -457,7 +472,7 @@ int main(int argc, char **argv)
         if (!errs.count && r && r->root) {
             TreeNode **taxa = NULL; int n_taxa = 0, tcap = 0;
             treenode_collect_leaves(r->root, &taxa, &n_taxa, &tcap);
-            char *newick = species_newick(r, &intro);
+            char *newick = result_newick(&imp, r, &intro);
             int filled = 0; int *counts = NULL;
             char *block = species_block(taxa, n_taxa, newick, imap, &filled, &counts);
             char *migblk = mig.count ? migration_block(&mig, r) : NULL;

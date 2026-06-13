@@ -599,10 +599,28 @@ echo "$n1" > "$TMP/m2.nwk"; n2=$("$BIN" --read "$TMP/m2.nwk" --newick-only)
 if [[ "$n1" = "$n2" ]]; then pass=$((pass+1))
 else fail=$((fail+1)); echo "FAIL ti95: neander-m2 re-read not idempotent"; fi
 
+# m3 = STACKED: two MOD->NEAN pulses on one lineage (hn2 inner, hn1 outer) plus
+# VC->CEU. The flat IntroList cannot represent this; the old model failed with
+# INTROGRESSION_UNKNOWN ('mod_pre2' not in the tree). It is now carried as the
+# graph and re-emitted by direct serialisation -- the step-2 payoff. It must
+# read (exit 0), re-emit the stacked structure faithfully, and round-trip.
+exit_is ti96 0 --read "$FIX/bpp/neander-m3.stree" --newick-only
+m3="$("$BIN" --read "$FIX/bpp/neander-m3.stree" --newick-only 2>/dev/null)"
+chk_contains ti97 "$m3" ')hn2[&tau-parent=yes])hn1[&tau-parent=yes]'  # stacked recipient lineage
+chk_contains ti98 "$m3" 'hn2[&phi=0.005,&tau-parent=no]'             # inner pulse, donor side
+chk_contains ti99 "$m3" 'hn1[&phi=0.05,&tau-parent=no]'             # outer pulse, donor side
+echo "$m3" > "$TMP/m3.nwk"; m3b=$("$BIN" --read "$TMP/m3.nwk" --newick-only 2>/dev/null)
+if [[ "$m3" = "$m3b" ]]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL ti100: neander-m3 re-read not idempotent"; fi
+# the species&tree block carries the stacked network too
+b3="$("$BIN" --read "$FIX/bpp/neander-m3.stree" 2>/dev/null)"
+chk_contains ti101 "$b3" 'species&tree = 6'
+chk_contains ti102 "$b3" 'hn2[&phi=0.005'
+
 # And bpp-lint accepts the re-emitted forms (semantic equivalence to originals)
 if [[ -x "$LINT" ]]; then
     for f in "$FIX/bpp/yeast-msci.stree" "$FIX/bpp/anopheles-msci.stree" "$FIX/bpp/ghost-msci.stree" \
-             "$FIX/bpp/neander-m1.stree" "$FIX/bpp/neander-m2.stree"; do
+             "$FIX/bpp/neander-m1.stree" "$FIX/bpp/neander-m2.stree" "$FIX/bpp/neander-m3.stree"; do
         nwk=$("$BIN" --read "$f" --newick-only)
         species=$(awk '/species&tree/{$1=$2=$3=$4="";print;exit}' "$f")
         n=$(echo "$species" | wc -w | tr -d ' ')
