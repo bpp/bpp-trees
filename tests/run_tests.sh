@@ -556,9 +556,26 @@ echo "$n1" > "$TMP/a.nwk"; n2=$("$BIN" --read "$TMP/a.nwk" --newick-only)
 if [[ "$n1" = "$n2" ]]; then pass=$((pass+1))
 else fail=$((fail+1)); echo "FAIL ti82: anopheles MSci re-read not idempotent"; fi
 
+# Ghost introgression (ARGmigrationROC): 3% GHOST -> AFR, written BPP-style with
+# phi=0.97 on AFR's NATIVE parent edge. Per BPP, the donor (GHOST) contribution
+# is 1-phi = 0.03; bpp-tree must report phi=0.03, not 0.97 (regression guard for
+# the phi-orientation bug -- phi sat on the def/recipient-primary occurrence).
+go="$("$BIN" --read "$FIX/bpp/ghost-msci.stree" --display --ascii 2>&1)"
+chk_contains ti83 "$go" "GHOST $SQ AFR"        # direction: donor GHOST, recipient AFR
+chk_contains ti84 "$go" 'phi=0.03'             # donor contribution = 1 - 0.97
+chk_contains ti85 "$go" 'model B'
+if echo "$go" | grep -q 'phi=0.97'; then
+    fail=$((fail+1)); echo "FAIL ti86: ghost phi not complemented (reported 0.97, donor gets 1-phi)"
+else pass=$((pass+1)); fi
+# Re-emit puts phi on the GHOST/donor side and is idempotent
+n1=$("$BIN" --read "$FIX/bpp/ghost-msci.stree" --newick-only)
+echo "$n1" > "$TMP/g.nwk"; n2=$("$BIN" --read "$TMP/g.nwk" --newick-only)
+if [[ "$n1" = "$n2" ]]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL ti87: ghost MSci re-read not idempotent"; fi
+
 # And bpp-lint accepts the re-emitted forms (semantic equivalence to originals)
 if [[ -x "$LINT" ]]; then
-    for f in "$FIX/bpp/yeast-msci.stree" "$FIX/bpp/anopheles-msci.stree"; do
+    for f in "$FIX/bpp/yeast-msci.stree" "$FIX/bpp/anopheles-msci.stree" "$FIX/bpp/ghost-msci.stree"; do
         nwk=$("$BIN" --read "$f" --newick-only)
         species=$(awk '/species&tree/{$1=$2=$3=$4="";print;exit}' "$f")
         n=$(echo "$species" | wc -w | tr -d ' ')

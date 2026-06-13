@@ -299,9 +299,20 @@ static int recover_introgressions(NwkNode *root, Import *im, DiagList *errs)
         int ref = 1 - def;
         NwkNode *defn = occ[def].node, *refn = occ[ref].node;
         NwkNode *defp = occ[def].parent, *refp = occ[ref].parent;
-        /* phi: prefer the ref's annotation; fall back to defn's */
-        char *phi_s = anno_get(refn->annotation, "phi");
-        if (!phi_s) phi_s = anno_get(defn->annotation, "phi");
+        /* phi may be annotated on EITHER occurrence. Per BPP, &phi=X on an
+         * occurrence is the inheritance weight of the edge (that occurrence's
+         * parent -> hybrid node); the other occurrence's edge carries 1-X.
+         * Our ev.phi is the DONOR's contribution -- the weight on the donor
+         * edge -- so phi read from the donor-side occurrence is used as-is, and
+         * phi read from the recipient's primary-parent occurrence is
+         * complemented to 1-X. The donor side is refn normally, defn on a swap
+         * (computed just below). */
+        char *phi_ref = anno_get(refn->annotation, "phi");
+        char *phi_def = anno_get(defn->annotation, "phi");
+        double phi_val; int phi_on_ref;
+        if (phi_ref)      { phi_val = atof(phi_ref); phi_on_ref = 1; }
+        else if (phi_def) { phi_val = atof(phi_def); phi_on_ref = 0; }
+        else              { phi_val = 0.5;           phi_on_ref = 1; }
         char *def_tau = anno_get(defn->annotation, "tau-parent");
         char *ref_tau = anno_get(refn->annotation, "tau-parent");
 
@@ -316,7 +327,9 @@ static int recover_introgressions(NwkNode *root, Import *im, DiagList *errs)
                     def_tau && strcasecmp(def_tau, "no")  == 0);
 
         IntroEvent ev; memset(&ev, 0, sizeof ev);
-        ev.phi   = phi_s ? atof(phi_s) : 0.5;
+        /* donor side is refn (no swap) or defn (swap); use phi as-is there,
+         * else complement. */
+        ev.phi   = (swap ? !phi_on_ref : phi_on_ref) ? phi_val : 1.0 - phi_val;
         ev.phi2  = -1.0;
         ev.label = xstrdup(labels[i]);
         /* In our overlay-emit, src tau is on the bare ref (donor's location).
@@ -410,7 +423,7 @@ static int recover_introgressions(NwkNode *root, Import *im, DiagList *errs)
                 drop_child(refp, refn);
             }
         }
-        free(phi_s); free(def_tau); free(ref_tau);
+        free(phi_ref); free(phi_def); free(def_tau); free(ref_tau);
     }
     free(labels);
 

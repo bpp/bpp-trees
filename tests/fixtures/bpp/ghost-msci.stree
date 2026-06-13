@@ -1,0 +1,3 @@
+species&tree = 2 AFR GHOST
+                 4  2
+                 ((AFR)H[&phi=0.97,&tau-parent=yes], (GHOST, H[&tau-parent=no])S)R;
