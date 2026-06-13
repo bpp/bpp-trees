@@ -573,9 +573,36 @@ echo "$n1" > "$TMP/g.nwk"; n2=$("$BIN" --read "$TMP/g.nwk" --newick-only)
 if [[ "$n1" = "$n2" ]]; then pass=$((pass+1))
 else fail=$((fail+1)); echo "FAIL ti87: ghost MSci re-read not idempotent"; fi
 
+# Neanderthal/Akey trees: MULTIPLE introgression events in one network.
+# m1 = single event (MOD->NEAN); m2 = two NESTED events (the nh_hyb donor ref
+# sits inside hn_hyb's recipient clade). These guard two multi-event import
+# bugs: a heap-use-after-free from labels[] aliasing freed tree strings, and a
+# polluted implicit label ('..._nh_hyb') when a clade encloses another event's
+# bare hybrid reference. Both must read cleanly and round-trip idempotently.
+m1="$("$BIN" --read "$FIX/bpp/neander-m1.stree" --display --ascii 2>&1)"
+chk_contains ti88 "$m1" "MOD $SQ NEAN"
+chk_contains ti89 "$m1" 'phi=0.05'
+n1=$("$BIN" --read "$FIX/bpp/neander-m1.stree" --newick-only)
+echo "$n1" > "$TMP/m1.nwk"; n2=$("$BIN" --read "$TMP/m1.nwk" --newick-only)
+if [[ "$n1" = "$n2" ]]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL ti90: neander-m1 re-read not idempotent"; fi
+
+m2="$("$BIN" --read "$FIX/bpp/neander-m2.stree" --display --ascii 2>&1)"
+chk_contains ti91 "$m2" "MOD $SQ NEAN"          # event hn_hyb
+chk_contains ti92 "$m2" "VC $SQ CEU"            # event nh_hyb (the nested one)
+chk_contains ti93 "$m2" 'phi=0.02'              # donor VC contributes 2% to CEU
+if echo "$m2" | grep -q '_nh_hyb'; then          # implicit label must not leak the hybrid token
+    fail=$((fail+1)); echo "FAIL ti94: neander-m2 implicit label leaked a hybrid token"
+else pass=$((pass+1)); fi
+n1=$("$BIN" --read "$FIX/bpp/neander-m2.stree" --newick-only)
+echo "$n1" > "$TMP/m2.nwk"; n2=$("$BIN" --read "$TMP/m2.nwk" --newick-only)
+if [[ "$n1" = "$n2" ]]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL ti95: neander-m2 re-read not idempotent"; fi
+
 # And bpp-lint accepts the re-emitted forms (semantic equivalence to originals)
 if [[ -x "$LINT" ]]; then
-    for f in "$FIX/bpp/yeast-msci.stree" "$FIX/bpp/anopheles-msci.stree" "$FIX/bpp/ghost-msci.stree"; do
+    for f in "$FIX/bpp/yeast-msci.stree" "$FIX/bpp/anopheles-msci.stree" "$FIX/bpp/ghost-msci.stree" \
+             "$FIX/bpp/neander-m1.stree" "$FIX/bpp/neander-m2.stree"; do
         nwk=$("$BIN" --read "$f" --newick-only)
         species=$(awk '/species&tree/{$1=$2=$3=$4="";print;exit}' "$f")
         n=$(echo "$species" | wc -w | tr -d ' ')

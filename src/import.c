@@ -190,6 +190,22 @@ static char *anno_get(const char *anno, const char *key)
  * one bare; or two labelled in some eNewick forms). */
 typedef struct { NwkNode *parent; NwkNode *node; } LabOcc;
 
+/* During recovery the tree still contains the bare hybrid references of events
+ * not yet unwrapped. Leaf-name collection (for a clade's implicit label) must
+ * ignore them, or a recipient/donor clade that encloses another event's bare
+ * ref would get a polluted implicit label like 'ALTAI_CHAG_VINDIJA_nh_hyb'.
+ * Set for the duration of recover_introgressions, cleared before it returns. */
+static const char **g_hyb_labels = NULL;
+static int g_hyb_count = 0;
+
+static int is_hybrid_label(const char *s)
+{
+    if (!s) return 0;
+    for (int i = 0; i < g_hyb_count; i++)
+        if (strcmp(g_hyb_labels[i], s) == 0) return 1;
+    return 0;
+}
+
 static void find_occ(NwkNode *n, NwkNode *parent, const char *label,
                      LabOcc *out, int *count)
 {
@@ -274,14 +290,19 @@ static int recover_introgressions(NwkNode *root, Import *im, DiagList *errs)
 {
     const char **all = NULL; int total = 0, total_cap = 0;
     collect_labels(root, &all, &total, &total_cap);
-    /* Restrict to labels that appear more than once: those are hybrid nodes. */
-    const char **labels = NULL; int n = 0;
+    /* Restrict to labels that appear more than once: those are hybrid nodes.
+     * Own a COPY of each: rewriting the tree below frees hybrid nodes (and their
+     * label strings) as events are unwrapped, but labels[] is consulted across
+     * all iterations (e.g. the bare-hybrid check), so it must not alias freed
+     * tree strings. */
+    char **labels = NULL; int n = 0;
     for (int i = 0; i < total; i++)
         if (label_count(root, all[i]) >= 2) {
             labels = xrealloc(labels, (size_t)(n + 1) * sizeof(*labels));
-            labels[n++] = all[i];
+            labels[n++] = xstrdup(all[i]);
         }
     free(all);
+    g_hyb_labels = (const char **)labels; g_hyb_count = n;
 
     int had_anno = 0;
     for (int i = 0; i < n; i++) {
@@ -425,6 +446,8 @@ static int recover_introgressions(NwkNode *root, Import *im, DiagList *errs)
         }
         free(phi_ref); free(phi_def); free(def_tau); free(ref_tau);
     }
+    g_hyb_labels = NULL; g_hyb_count = 0;
+    for (int i = 0; i < n; i++) free(labels[i]);
     free(labels);
 
     /* Detect Model D: pairs of recovered events with reciprocal donor/recipient
@@ -482,6 +505,7 @@ static int collect_leaf_names(const NwkNode *n, char **out, int *cnt, int cap);
 static int collect_leaf_names(const NwkNode *n, char **out, int *cnt, int cap)
 {
     if (!n->n_children) {
+        if (is_hybrid_label(n->label)) return 1;   /* skip bare hybrid references */
         if (*cnt < cap) out[(*cnt)++] = n->label ? n->label : "?";
         return 1;
     }

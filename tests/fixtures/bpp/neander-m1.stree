@@ -1,0 +1,3 @@
+species&tree = 6  YRI  CEU  ALTAI  VINDIJA  CHAG  DENISOVA
+                  6    6    1      1        1     1
+        ((((ALTAI, (VINDIJA, CHAG)VC)NEAN)hn_hyb[&tau-parent=yes], (hn_hyb[&tau-parent=no,&phi=0.05], (YRI, CEU)MOD)mod_pre)HN, DENISOVA)ROOT;
