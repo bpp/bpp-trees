@@ -59,3 +59,71 @@ And produces:
 - make test passes all 40 tests
 - species&tree block for the 4-population realdata fixture is accepted
   by bpp-lint without errors
+
+---
+
+## MSC-I introgression: graph-model redesign (IN PROGRESS)
+
+The tool has grown well beyond the original spec above (MSC-M migration, MSC-I
+introgression with extended-Newick I/O, an interactive REPL, `--read`). The
+current work is a **redesign of MSC-I onto a single graph model**. If you are
+touching `src/import.c`, `src/introgress.c`, the `--introgression` flag, or the
+interactive `introgress` command, **read `docs/graph-model.md` in full first —
+it is the authoritative spec.** This section is just the orientation.
+
+### Why
+MSC-I is currently stored as a *fixed base binary tree + a flat list of events,
+each pinned to a named branch*. That model **cannot represent stacked
+introgressions** (two reticulation edges on the same lineage — e.g. the Akey
+"M3" Neanderthal trees), and the importer's heuristic recovery into it has been
+the source of a run of bugs. The redesign makes the importer and the
+construction language share **one network graph**: anything readable is
+writable, and the importer becomes a faithful parse instead of a heuristic.
+
+### Baseline already landed (do not re-fix)
+- **phi orientation on import** (commit ed259d3): BPP's `&phi=X` is the weight of
+  the edge `parent(annotated-occurrence) → hybrid`; `ev.phi` is the *donor's*
+  contribution, so it is complemented (`1−X`) when the annotation sits on the
+  recipient's primary edge. Confirmed against bpp source.
+- **multi-event import** (commit 2b40bfb): `labels[]` owns string copies (fixed a
+  use-after-free); recovery-time leaf-name collection skips bare hybrid refs
+  (fixed an implicit-label leak like `ALTAI_CHAG_VINDIJA_nh_hyb`). M1/M2 read and
+  round-trip; M3 still fails with a clean `INTROGRESSION_UNKNOWN`, which the
+  redesign fixes.
+
+### Design decisions (full detail in docs/graph-model.md)
+- A branch is named by its **lower node**; an event attaches to the branch
+  **immediately above** the named endpoint. Endpoints may be a tip, a clade, or
+  a **prior event's name** (its hybrid node).
+- **Stacking = creation order, latest event innermost.** No `above`/`below`
+  keyword. Reference a prior event's name to override the default order.
+- **Names via `= NAME`** (like `A+B = pan`): unique, no `_`, no tip/clade
+  collision; `label=` is a synonym; auto-named `H1, H2, …` if omitted.
+- `phi` is always the donor's contribution, emitted on the donor-side bare ref.
+
+### Implementation order
+1. Graph data structure + faithful eNewick parse, replacing
+   `recover_introgressions`.
+2. Re-emit by direct serialization of the graph (idempotent by construction).
+3. Derived display/legend from the graph.
+4. Construction-side insertion semantics (insert-above-node; multiple hybrids per
+   branch; node-valued endpoints; `= NAME`).
+5. Base-tree/join recovery for editing (`move`/`graft`/`rotate`).
+
+### Testing
+- Keep every existing test green (`make test`, currently **197/0**; also clean
+  under `make debug` ASan/UBSan).
+- Portable real-network fixtures: `tests/fixtures/bpp/*.stree`
+  (yeast, anopheles, ghost, neander-m1, neander-m2). Add an **M3 stacked**
+  fixture once it reads, with the construction-language form from graph-model.md.
+- Semantic oracle: where a `bpp` binary exists (it was at `/usr/local/bin/bpp`
+  on the original dev box; not guaranteed elsewhere), `bpp --cfile FILE` prints
+  the parsed hybridization summary (per-edge phi, tau flags,
+  `phi_X : parent -> X` direction). Require bpp's reading of bpp-tree's
+  *re-emitted* network to match its reading of the original — that is the real
+  definition of "robust to every eNewick." `bpp --msci-create DEFS` builds graphs
+  from a definitions file and is prior art for the construction language
+  (`tree` / `define ... as` / `hybridization ... as ... tau ... phi ...`).
+- Larger reference corpora (not committed, original machine only):
+  `~/repos/akey_reanalysis/bpp_ctl` (M1/M2/M3 across many files),
+  `~/repos/ARGmigrationROC` (ghost), `~/repos/bpp/examples` (yeast, anopheles).
