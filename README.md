@@ -293,6 +293,38 @@ introgression from the secondary parent into `H`. The `hybrid` shortcut
 bundles them: `hybrid H : A, C phi=0.4` creates a new tip `H` beside primary
 parent `A` and adds a φ=0.4 reticulation from `C`.
 
+**Naming events (`= NAME`).** Like the join syntax `A+B = pan`, an event can be
+named: `--introgression 'MOD->NEAN = hn1 phi=0.05'`. Names must be unique and
+must not collide with a tip or clade or contain `_`; `label=NAME` is a synonym;
+unnamed events auto-number `H1, H2, …`. The name labels the hybrid node in the
+eNewick and makes the event addressable (below).
+
+**Stacked introgressions.** Repeating a recipient places **several pulses on one
+lineage** — e.g. two modern→Neanderthal pulses at different depths (the Akey
+"M3" networks):
+
+```
+$ bpp-tree --joins 'ALTAI+VC=NEAN, VINDIJA+CHAG=VC, YRI+CEU=MOD, NEAN+MOD=HN, HN+DENISOVA' \
+    --introgression 'MOD->NEAN = hn1 phi=0.05 src=node dst=branch,
+                     MOD->NEAN = hn2 phi=0.005 src=node dst=branch,
+                     VC->CEU  = nh  phi=0.02 src=node dst=branch' --display --ascii
+...
+  |-+ NEAN ⇝hn1(.05) ⇝hn2(.01)     # recipient of both pulses
+  `-+ MOD hn1⇝ hn2⇝                # donor of both
+introgressions:
+  hn1:  MOD ⇝ NEAN   phi=0.05    [model B]
+  hn2:  MOD ⇝ NEAN   phi=0.005   [model B]
+  nh:   VC  ⇝ CEU    phi=0.02    [model B]
+```
+
+Each event is inserted **immediately above** the named node, so a later event on
+the same lineage lands *inside* the earlier one (latest = innermost). To stack in
+a different order, name the node to attach above by referencing a prior event:
+`MOD->NEAN = hn2 …, MOD->hn2 = hn1 …` puts `hn1` above `hn2`. Such a network is
+read, re-emitted (idempotently), displayed, and **editable** — `--read net.stree
+--prune DENISOVA` drops the taxon and re-pins the events to the edited tree (an
+edit that removes an event endpoint is refused, the read is not).
+
 **Bidirectional introgression (Model D)** is a single coupled event between
 **sister branches**: `--introgression 'A<->B phi=0.3 phi2=0.1'`. BPP requires
 the two hybrids to share an immediate parent in the tree, and forbids
@@ -302,9 +334,10 @@ must use two unidirectional events instead.
 
 **Validation:** φ in (0, 1); endpoints are existing branches (tips or
 clades); donor and recipient are **non-nested** (neither is the other's
-ancestor); at most **one** event per taxon pair (regardless of direction);
-each node is a recipient at most once (a hybrid node has exactly two
-parents). All errors are reported together.
+ancestor); a *reciprocal* pair (`A->B` **and** `B->A`) is rejected — that is a
+`<->` bidirectional event, not two separate ones. A lineage may be the
+recipient of **several** stacked events (see below). All errors are reported
+together.
 
 **Output:** the eNewick string is emitted in `species&tree`; bpp-tree prints
 a reminder that `phiprior = a b` (Beta prior) is required in the BPP control
@@ -334,7 +367,8 @@ file may be any of:
 
 - a plain **Newick** string `((A,B),C);` — tree only;
 - an **extended Newick** with `&phi=` / `&tau-parent=` annotations — bpp-tree
-  recovers the MSC-I introgression events from the doubled hybrid labels;
+  parses the doubled hybrid labels straight into its network graph (a faithful
+  parse, not a heuristic), so even stacked (M3) and bidirectional networks read;
 - a BPP **`species&tree` block** (counts and Newick together, the form
   written by `--out`/`block FILE`) — migration bands inside the same file are
   picked up too;
@@ -352,10 +386,10 @@ $ bpp-tree --read my.stree --display              # read it straight back
 
 The full tree state is preserved: topology, child order, internal-clade
 labels used by migration/introgression endpoints, MSC-I φ and per-end
-`tau-parent` placement (Models A/B/C), bidirectional Model D events (the
-coupled two-node form is detected and recovered as one bidir event), and
-the migration `= N` block. Reading is **idempotent** for every model — write
-→ read → write produces a byte-identical Newick string.
+`tau-parent` placement (Models A/B/C), **stacked** pulses on one lineage,
+bidirectional Model D events (the coupled two-node form parses to one bidir
+event), and the migration `= N` block. Reading is **idempotent** for every
+model — write → read → write produces a byte-identical Newick string.
 
 In the REPL, `read FILE` replaces the active tree from a file, and
 `read FILE as NAME` creates (or replaces) a named tree from one — exactly

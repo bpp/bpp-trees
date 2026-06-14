@@ -1,7 +1,29 @@
 # bpp-tree: introgression graph model and insertion semantics
 
-Status: design (not yet implemented). Supersedes the "base tree + flat list of
-independent branch-keyed events" model for everything to do with MSC-I.
+Status: **implemented and shipped.** The single network graph is the one
+representation for parse, re-emit, display, construction and editing across
+every BPP model (A, B, C, and D); the old flat event list and its heuristic
+importer (`recover_introgressions`) are gone. This document is the design
+rationale; `src/graph.h` and the "graph model" section of `CLAUDE.md` are the
+as-built reference.
+
+Two refinements the implementation added to the design below — read these before
+the rest:
+
+- **Native-edge normalisation.** "The base species tree is recovered by deleting
+  every secondary edge and suppressing each hybrid node" (below) is true only
+  once `primary_parent` is the **native** (own-τ, `tau-parent=yes`) side. In a
+  Model-B *swap* the eNewick writes the recipient subtree on the *donor* side, so
+  `graph_from_newick` swaps the two parents (and `phi → 1−phi`) at parse time.
+  After that the donor is **always** the secondary side and `phi` is always its
+  contribution there — no per-model φ complement anywhere downstream.
+- **Donor bare ref emits first.** On a donor attachment the bare hybrid reference
+  is the *first* child: BPP pairs stacked-hybrid φ by child order and rejects a
+  trailing bare ref with "phi do not sum to 1".
+- **Model D** is two hybrids that are each other's secondary parent. It is built
+  and re-emitted directly (φ but no `tau-parent`), and `graph_events` collapses
+  the pair into one legend line. (Model-D *construction* via `A<->B` still uses
+  the legacy `IntroList` emitter; importing/displaying it uses the graph.)
 
 ## Why
 
@@ -167,21 +189,23 @@ Derived from the graph, never re-derived heuristically:
 
 ## Import (the inverse)
 
-Parsing eNewick builds the graph directly:
+Parsing eNewick builds the graph directly (`graph_from_newick`):
 
 - Each label occurring twice is a hybrid node. The occurrence carrying a subtree
-  gives `H.child` and `H.primary_parent`; the bare occurrence gives
-  `H.secondary_parent` (donor) and `phi` (complemented per BPP if the annotation
-  sits on the primary edge — see the BPP semantics already encoded in
-  `import.c`). `tau-parent` flags map to `tau_primary`/`tau_secondary`.
-- No tree rewriting, no "definition occurrence" guessing, no donor/recipient
-  name reconstruction. The graph *is* the parsed structure, so stacked networks
-  (M3) parse with no special handling.
+  gives `H.child`; the bare occurrence gives the donor end and `phi`. `tau-parent`
+  flags map to `tau_primary`/`tau_secondary`. Then **native-edge normalisation**
+  (see the top of this doc) makes `primary_parent` the own-τ side.
+- No tree rewriting, no "definition occurrence" guessing, no donor/recipient name
+  reconstruction. The graph *is* the parsed structure, so stacked networks (M3)
+  and bidirectional (model D) networks parse with no special handling. The
+  importer is a faithful parse; the old heuristic `recover_introgressions` has
+  been deleted.
 
-Editing (`move`/`graft`/`rotate`) operates on the recovered base tree; events
-re-pin to nodes after each edit. A network that the *editing* operations cannot
-express still reads, displays, and re-emits faithfully — only the edit is
-refused, with a message, rather than the read failing.
+Editing (`move`/`graft`/`prune`/`rotate`) operates on the recovered base tree;
+events re-pin to nodes after each edit by deriving the event list from the graph,
+applying the edit to the base tree, and rebuilding with `graph_construct`. An
+edit that deletes an event endpoint makes the rebuild fail — the edit is refused
+with a message, the read is not.
 
 ## Validation
 
