@@ -62,68 +62,78 @@ And produces:
 
 ---
 
-## MSC-I introgression: graph-model redesign (IN PROGRESS)
+## MSC-I introgression: the graph model (LANDED)
 
-The tool has grown well beyond the original spec above (MSC-M migration, MSC-I
-introgression with extended-Newick I/O, an interactive REPL, `--read`). The
-current work is a **redesign of MSC-I onto a single graph model**. If you are
-touching `src/import.c`, `src/introgress.c`, the `--introgression` flag, or the
-interactive `introgress` command, **read `docs/graph-model.md` in full first —
-it is the authoritative spec.** This section is just the orientation.
+MSC-I is built on a **single network graph** that is the one representation for
+parse, re-emit, display, construction and editing across **every** BPP model
+(A, B, C, and D / bidirectional). The old "fixed base tree + flat list of
+branch-keyed events" model and its heuristic importer (`recover_introgressions`)
+are **gone**. `docs/graph-model.md` is the authoritative design spec; this is
+the orientation. If you touch the network code, read `src/graph.h` first.
 
-### Why
-MSC-I is currently stored as a *fixed base binary tree + a flat list of events,
-each pinned to a named branch*. That model **cannot represent stacked
-introgressions** (two reticulation edges on the same lineage — e.g. the Akey
-"M3" Neanderthal trees), and the importer's heuristic recovery into it has been
-the source of a run of bugs. The redesign makes the importer and the
-construction language share **one network graph**: anything readable is
-writable, and the importer becomes a faithful parse instead of a heuristic.
+### Architecture (where things live)
+- **`src/newick.{h,c}`** — the shared (extended-)Newick parser. A hybrid label
+  simply appears twice; no MSC-I interpretation here.
+- **`src/graph.{h,c}`** — the network graph and everything structural:
+  `graph_from_newick` (faithful build), `graph_to_newick` (re-emit),
+  `graph_base_newick` (the species tree), `graph_events` (display/legend events),
+  and `graph_alloc`/`graph_new_node`/`graph_add_child` (build primitives).
+- **`src/introgress.c`** — bridges graph ↔ resolver: `graph_construct` (build a
+  network from a base tree + ordered events), `introlist_events` (graph → flat
+  event list), `introlist_mark` (display markers), `introlist_from_graph`
+  (= events + mark), plus the legacy `IntroList` parse/apply/legend still used
+  for **simple, non-stacked construction**.
+- **`src/import.c`** — builds the graph and, for any network with hybrids, sets
+  `Import.graph` + `graph_only`; the flat `Import.intro` is also filled (from the
+  graph) for the REPL/JSON. Plain trees take the normal join path.
 
-### Baseline already landed (do not re-fix)
-- **phi orientation on import** (commit ed259d3): BPP's `&phi=X` is the weight of
-  the edge `parent(annotated-occurrence) → hybrid`; `ev.phi` is the *donor's*
-  contribution, so it is complemented (`1−X`) when the annotation sits on the
-  recipient's primary edge. Confirmed against bpp source.
-- **multi-event import** (commit 2b40bfb): `labels[]` owns string copies (fixed a
-  use-after-free); recovery-time leaf-name collection skips bare hybrid refs
-  (fixed an implicit-label leak like `ALTAI_CHAG_VINDIJA_nh_hyb`). M1/M2 read and
-  round-trip; M3 still fails with a clean `INTROGRESSION_UNKNOWN`, which the
-  redesign fixes.
+### Invariants you must not break
+- **Native-edge normalisation.** After `graph_from_newick`, a hybrid's
+  `primary_parent` is always the **native** (own-τ, `tau-parent=yes`) side and
+  `secondary_parent` is the **donor**. So the base tree follows native edges
+  (BPP's species tree — yeast's Sbay basal), re-emission is the swapped form BPP
+  reads identically, and the donor is **always** the secondary side with
+  `H->phi` its contribution (no per-model φ complement — getting this wrong
+  re-reads a model-A φ as `1−φ`).
+- **Bidirectional = mutual secondary.** `gn_is_bidir(H)` ⇔ `H` and its donor are
+  each other's secondary parent. Bidir nodes emit φ but **no `tau-parent`** (BPP
+  rejects τ there); `graph_events` collapses the pair into one model-D event.
+- **Stacking = insert immediately above the named node, latest innermost.** The
+  donor bare ref is the attachment's **first** child (BPP pairs stacked-hybrid φ
+  by child order and rejects a trailing bare ref with "phi do not sum to 1").
+- **Editing** re-pins: derive events (`introlist_events`), apply the edit to the
+  base tree, rebuild with `graph_construct(..., check_names=0, ...)`. An edit
+  that deletes an endpoint makes the rebuild fail → the edit is refused, the read
+  is not.
 
-### Design decisions (full detail in docs/graph-model.md)
-- A branch is named by its **lower node**; an event attaches to the branch
-  **immediately above** the named endpoint. Endpoints may be a tip, a clade, or
-  a **prior event's name** (its hybrid node).
-- **Stacking = creation order, latest event innermost.** No `above`/`below`
-  keyword. Reference a prior event's name to override the default order.
-- **Names via `= NAME`** (like `A+B = pan`): unique, no `_`, no tip/clade
-  collision; `label=` is a synonym; auto-named `H1, H2, …` if omitted.
-- `phi` is always the donor's contribution, emitted on the donor-side bare ref.
-
-### Implementation order
-1. Graph data structure + faithful eNewick parse, replacing
-   `recover_introgressions`.
-2. Re-emit by direct serialization of the graph (idempotent by construction).
-3. Derived display/legend from the graph.
-4. Construction-side insertion semantics (insert-above-node; multiple hybrids per
-   branch; node-valued endpoints; `= NAME`).
-5. Base-tree/join recovery for editing (`move`/`graft`/`rotate`).
+### Construction language (`--introgression`)
+`DONOR -> RECIP [= NAME] [phi=P] [src=branch|node] [dst=branch|node]`,
+`','`/`';'`-separated. Repeating a recipient **stacks** pulses; an endpoint may
+name a prior event (order override). `= NAME` names the event (`label=` synonym;
+auto `H1,H2,…`; unique, no `_`, no tip/clade collision). `A <-> B` is model D.
 
 ### Testing
-- Keep every existing test green (`make test`, currently **197/0**; also clean
-  under `make debug` ASan/UBSan).
-- Portable real-network fixtures: `tests/fixtures/bpp/*.stree`
-  (yeast, anopheles, ghost, neander-m1, neander-m2). Add an **M3 stacked**
-  fixture once it reads, with the construction-language form from graph-model.md.
-- Semantic oracle: where a `bpp` binary exists (it was at `/usr/local/bin/bpp`
-  on the original dev box; not guaranteed elsewhere), `bpp --cfile FILE` prints
-  the parsed hybridization summary (per-edge phi, tau flags,
-  `phi_X : parent -> X` direction). Require bpp's reading of bpp-tree's
-  *re-emitted* network to match its reading of the original — that is the real
-  definition of "robust to every eNewick." `bpp --msci-create DEFS` builds graphs
-  from a definitions file and is prior art for the construction language
-  (`tree` / `define ... as` / `hybridization ... as ... tau ... phi ...`).
-- Larger reference corpora (not committed, original machine only):
-  `~/repos/akey_reanalysis/bpp_ctl` (M1/M2/M3 across many files),
+- `make test` is **254/0**; `make debug` is clean under ASan/UBSan (3 pre-existing
+  `null format string` warnings from system FORTIFY headers are not ours).
+- Portable fixtures `tests/fixtures/bpp/*.stree`: yeast, anopheles, ghost,
+  neander-m1/m2, and **neander-m3** (the real Akey stacked network).
+- `tests/graph_roundtrip` (a Makefile target wired into `make test`) asserts
+  `parse → graph → string` is byte-stable for every fixture.
+- **Semantic oracle** (present on this machine at `/usr/local/bin/bpp`, not
+  guaranteed elsewhere): `bpp --cfile FILE` prints the parsed hybridisation
+  summary (`phi_X : parent -> X`, τ flags, bidirection count). The standard is
+  that bpp's reading of bpp-tree's **re-emitted** network matches its reading of
+  the original — verified for every fixture incl. M3 and model D. Needs a minimal
+  runnable ctl (`jobname=`, `finetune = 1`, a tiny seqfile+Imap, `usedata = 0`).
+- Larger corpora (not committed): `~/repos/akey_reanalysis/bpp_ctl` (M1/M2/M3),
   `~/repos/ARGmigrationROC` (ghost), `~/repos/bpp/examples` (yeast, anopheles).
+
+### Remaining optional tidy-ups (not correctness gaps)
+- **Model-D *construction*** (`A<->B`) still emits via the legacy `IntroList`
+  path (`introlist_apply` + `introgress_newick`); import and display of model D
+  go through the graph. Routing construction through `graph_construct` too would
+  let that legacy emit retire.
+- **ROOT-label round-trip**: `extract_newick_and_blocks` truncates the outermost
+  label; the graph re-emit therefore drops a root label like `ROOT`
+  (oracle-confirmed harmless). A proper fix routes plain trees through the graph
+  as well, so the legacy join `walk` no longer needs to drop the root label.
