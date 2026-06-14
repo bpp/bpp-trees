@@ -206,15 +206,10 @@ Graph *graph_from_newick(const NwkNode *root, DiagList *errs)
             bad = 1; break;
         }
         if (!e->phi_set) H->phi = 0.5;
-        /* model D: two hybrids that are each other's donor (mutual secondary). */
-        GraphNode *G = H->secondary_parent;
-        if (G && G->is_hybrid && G->secondary_parent == H) {
-            diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
-                "imported network: '%s'/'%s' form a bidirectional (model D) "
-                "reticulation, which the graph model does not yet represent.",
-                e->label, G->label ? G->label : "?");
-            bad = 1; break;
-        }
+        /* model D (two hybrids that are each other's donor -- mutual secondary)
+         * is represented directly: the structure already builds, and the bidir
+         * predicate gn_is_bidir() drives tau-free emission and the coupled
+         * legend. No special handling needed here. */
     }
 
     /* Normalise to native edges. The eNewick puts the recipient subtree at the
@@ -242,8 +237,19 @@ Graph *graph_from_newick(const NwkNode *root, DiagList *errs)
 
 /* --- serialisation ------------------------------------------------------- */
 
+/* A hybrid is bidirectional (BPP model D) when it and its donor are each
+ * other's secondary (introgression) parent. */
+static int gn_is_bidir(const GraphNode *h)
+{
+    const GraphNode *g = h->secondary_parent;
+    return h->is_hybrid && g && g->is_hybrid && g->secondary_parent == h;
+}
+
 static char *bare_ref(const GraphNode *h)
 {
+    /* model D carries phi but no tau-parent (BPP rejects tau on bidir nodes) */
+    if (gn_is_bidir(h))
+        return xasprintf("%s[&phi=%g]", h->label ? h->label : "?", h->phi);
     return xasprintf("%s[&phi=%g,&tau-parent=%s]",
                      h->label ? h->label : "?", h->phi,
                      h->tau_secondary ? "yes" : "no");
@@ -266,7 +272,7 @@ static char *emit_node(const GraphNode *n)
         char *t = xasprintf("%s)%s", core, n->label ? n->label : "");
         free(core); core = t;
     }
-    if (n->is_hybrid) {                          /* primary occurrence carries tau, not phi */
+    if (n->is_hybrid && !gn_is_bidir(n)) {       /* primary occurrence carries tau, not phi */
         char *t = xasprintf("%s[&tau-parent=%s]", core, n->tau_primary ? "yes" : "no");
         free(core); core = t;
     }
@@ -391,6 +397,35 @@ GraphEvent *graph_events(const Graph *g, int *n_out)
         if (dp) for (int j = 0; j < dp->n_children; j++)
             if (dp->children[j] != H) { donor = dp->children[j]; break; }
 
+        if (gn_is_bidir(H)) {
+            /* model D: one coupled event per pair. H is the donor side, its
+             * partner G (= secondary parent) the recipient side; emit once and
+             * skip G when it comes round. phi(donor->recip) is G's inheritance
+             * from H (G->phi); phi2(recip->donor) is H->phi. */
+            const GraphNode *G = H->secondary_parent;
+            int seen = 0;                        /* skip H if its pair already emitted */
+            for (int p = 0; p < k; p++)
+                if ((ev[p].name   && H->label && strcmp(ev[p].name,   H->label) == 0) ||
+                    (ev[p].label2 && H->label && strcmp(ev[p].label2, H->label) == 0)) { seen = 1; break; }
+            if (seen) continue;
+            const GraphNode *grec = NULL;
+            for (int j = 0; j < G->n_children; j++) {
+                const GraphNode *c = G->children[j];
+                if (c->is_hybrid && c->secondary_parent == G) continue;
+                grec = c; break;
+            }
+            ev[k].name   = xstrdup(H->label ? H->label : "?");
+            ev[k].label2 = xstrdup(G->label ? G->label : "?");
+            ev[k].donor  = recip ? project_name(recip) : xstrdup("?");  /* H's own pop */
+            ev[k].recip  = grec  ? project_name(grec)  : xstrdup("?");  /* G's own pop */
+            ev[k].phi    = G->phi;
+            ev[k].phi2   = H->phi;
+            ev[k].bidir  = 1;
+            ev[k].model  = 'D';
+            k++;
+            continue;
+        }
+
         ev[k].name  = xstrdup(H->label ? H->label : "?");
         ev[k].recip = recip ? project_name(recip) : xstrdup("?");
         ev[k].donor = donor ? project_name(donor) : xstrdup("?");
@@ -401,12 +436,15 @@ GraphEvent *graph_events(const Graph *g, int *n_out)
         ev[k].tau_dst = H->tau_primary;     /* recipient-edge own-tau */
         k++;
     }
+    *n_out = k;                              /* a model-D pair yields one event */
     return ev;
 }
 
 void graph_events_free(GraphEvent *ev, int n)
 {
     if (!ev) return;
-    for (int i = 0; i < n; i++) { free(ev[i].name); free(ev[i].donor); free(ev[i].recip); }
+    for (int i = 0; i < n; i++) {
+        free(ev[i].name); free(ev[i].donor); free(ev[i].recip); free(ev[i].label2);
+    }
     free(ev);
 }

@@ -484,10 +484,17 @@ void introlist_events(IntroList *g, const Graph *gr)
         e->recip = xstrdup(ev[k].recip);
         e->label = xstrdup(ev[k].name);
         e->phi   = ev[k].phi;
-        e->phi2  = -1.0;
-        e->bidir = 0;
-        e->src = ev[k].tau_src ? TAU_BRANCH : TAU_NODE;   /* donor-edge own-tau */
-        e->dst = ev[k].tau_dst ? TAU_BRANCH : TAU_NODE;   /* recipient-edge own-tau */
+        if (ev[k].bidir) {
+            e->bidir  = 1;
+            e->phi2   = ev[k].phi2;
+            e->label2 = xstrdup(ev[k].label2);
+            e->src = TAU_BRANCH; e->dst = TAU_BRANCH;   /* model D carries no tau */
+        } else {
+            e->phi2  = -1.0;
+            e->bidir = 0;
+            e->src = ev[k].tau_src ? TAU_BRANCH : TAU_NODE;   /* donor-edge own-tau */
+            e->dst = ev[k].tau_dst ? TAU_BRANCH : TAU_NODE;   /* recipient-edge own-tau */
+        }
     }
     graph_events_free(ev, n);
 }
@@ -504,6 +511,18 @@ void introlist_mark(IntroList *g, Resolution *r)
         char p1[16];
         snprintf(p1, sizeof p1, "%.2f", e->phi);
         const char *pp = p1[0] == '0' ? p1 + 1 : p1;
+        if (e->bidir) {
+            if (R && !R->is_leaf) R->show_label = 1;
+            char p2[16];
+            snprintf(p2, sizeof p2, "%.2f", e->phi2);
+            const char *pp2 = p2[0] == '0' ? p2 + 1 : p2;
+            char m[96];
+            snprintf(m, sizeof m, "%s\xe2\x87\x84%s(%s/%s)",   /* U+21C4 ⇄ */
+                     e->label, e->label2 ? e->label2 : "", pp, pp2);
+            if (D) treenode_add_intro(D, m, k + 1);
+            if (R) treenode_add_intro(R, m, k + 1);
+            continue;
+        }
         char dm[48], rm[64];
         snprintf(dm, sizeof dm, "%s\xe2\x87\x9d", e->label);
         snprintf(rm, sizeof rm, "\xe2\x87\x9d%s(%s)", e->label, pp);

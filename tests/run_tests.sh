@@ -472,6 +472,25 @@ chk_contains ti61 "$err" 'sister branches'
 err="$("$BIN" --joins 'A+B,A_B+C' --introgression 'A<->B src=node' 2>&1)"
 chk_contains ti62 "$err" 'do not accept'
 
+# Model D IMPORT now also goes through the graph (recover_introgressions retired):
+# read a bidirectional network back, faithfully re-emit it, and recover the
+# coupled legend. Re-emission must carry phi but NO tau-parent on the bidir
+# nodes, and round-trip idempotently.
+echo "$nD" > "$TMP/dimp.nwk"
+di="$("$BIN" --read "$TMP/dimp.nwk" --display --ascii 2>&1)"
+chk_contains ti63 "$di" "A $(printf '\xe2\x87\x84') B"     # ⇄ legend (donor ⇄ recipient)
+chk_contains ti64 "$di" 'model D'
+chk_contains ti65 "$di" 'phi=0.3 / 0.1'
+dn="$("$BIN" --read "$TMP/dimp.nwk" --newick-only 2>/dev/null)"
+chk_contains ti66 "$dn" '&phi=0.3'
+chk_contains ti67 "$dn" '&phi=0.1'
+if echo "$dn" | grep -q 'tau-parent'; then            # model D nodes carry no tau-parent
+    fail=$((fail+1)); echo "FAIL ti68b: model-D re-emit has tau-parent (BPP forbids it)"
+else pass=$((pass+1)); fi
+echo "$dn" > "$TMP/dimp2.nwk"; dn2=$("$BIN" --read "$TMP/dimp2.nwk" --newick-only 2>/dev/null)
+if [[ "$dn" = "$dn2" ]]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL ti68c: model-D import not idempotent"; fi
+
 # --- Import / round-trip ------------------------------------------------
 
 # CLI: --read with a plain Newick file

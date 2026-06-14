@@ -83,9 +83,13 @@ typedef struct {
     char  *donor;   /* base-tree donor population name (owned) */
     char  *recip;   /* base-tree recipient population name (owned) */
     double phi;     /* donor's contribution as displayed, in (0,1) */
-    char   model;   /* 'A' | 'B' | 'C' */
+    char   model;   /* 'A' | 'B' | 'C' | 'D' (bidirectional) */
     int    tau_src; /* donor-edge own-tau (1 = branch/yes) -- for reconstruction */
     int    tau_dst; /* recipient-edge own-tau (1 = branch/yes) */
+    /* model D only: the coupled reverse edge recip -> donor */
+    int    bidir;   /* 1 = bidirectional (model D) */
+    double phi2;    /* recipient's reverse contribution */
+    char  *label2;  /* the partner hybrid's label (owned) */
 } GraphEvent;
 
 /* One GraphEvent per hybrid (count = g->n_hybrids), in node order. Names are
