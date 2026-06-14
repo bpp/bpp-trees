@@ -669,6 +669,25 @@ chk_contains ti123 "$("$BIN" --joins "$CBASE" --introgression 'MOD->NEAN=h_1 phi
 # A reciprocal pair is still rejected (not stacking; use a <-> event).
 chk_contains ti124 "$("$BIN" --joins 'A+B,A_B+C' --introgression 'C->A ; A->C' 2>&1)" 'more than one event'
 
+# --- EDITING a stacked (graph-carried) network (step 5) ------------------
+# Editing the base tree must re-pin the events: the events are derived from the
+# graph, the edit lands on the base tree, and the network is rebuilt. Before
+# step 5 the edit was silently ignored (the stale graph was emitted).
+pm3="$("$BIN" --read "$FIX/bpp/neander-m3.stree" --prune DENISOVA --newick-only 2>/dev/null)"
+if echo "$pm3" | grep -q DENISOVA; then
+    fail=$((fail+1)); echo "FAIL ti125: --prune on stacked net was ignored (DENISOVA still present)"
+else pass=$((pass+1)); fi
+chk_contains ti126 "$pm3" ')hn2[&tau-parent=yes])hn1[&tau-parent=yes]'   # stacking survives the edit
+chk_contains ti127 "$pm3" 'nh_hyb[&phi=0.02'                            # all three events re-pinned
+echo "$pm3" > "$TMP/pm3.nwk"; pm3b=$("$BIN" --read "$TMP/pm3.nwk" --newick-only 2>/dev/null)
+if [[ "$pm3" = "$pm3b" ]]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL ti128: pruned stacked net not idempotent"; fi
+exit_is ti129 0 --read "$FIX/bpp/neander-m3.stree" --prune DENISOVA --newick-only
+# the UNEDITED import is still emitted faithfully (preserves the input labels)
+chk_contains ti130 "$("$BIN" --read "$FIX/bpp/neander-m3.stree" --newick-only 2>/dev/null)" 'mod_pre'
+# an edit that removes an event endpoint is refused (read does not fail silently)
+exit_is ti131 1 --read "$FIX/bpp/neander-m3.stree" --prune CEU --newick-only
+
 # And bpp-lint accepts the re-emitted forms (semantic equivalence to originals)
 if [[ -x "$LINT" ]]; then
     for f in "$FIX/bpp/yeast-msci.stree" "$FIX/bpp/anopheles-msci.stree" "$FIX/bpp/ghost-msci.stree" \

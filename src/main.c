@@ -448,7 +448,7 @@ int main(int argc, char **argv)
          * prior event) is built as a graph; the flat introlist_apply cannot
          * represent it. The display list is then re-derived from the graph. */
         if (o.introgression_spec && !errs.count && r->root && introlist_needs_graph(&intro)) {
-            cgraph = graph_construct(r, &intro, &errs);
+            cgraph = graph_construct(r, &intro, 1, &errs);
             if (cgraph) {
                 introlist_free(&intro); introlist_init(&intro);
                 introlist_from_graph(&intro, cgraph, r);
@@ -459,8 +459,22 @@ int main(int argc, char **argv)
         /* a stacked network imported as a graph derives its legend/markers
          * (and JSON/note) directly from the graph -- it cannot go through the
          * flat-list introlist_apply (a lineage hosts several events). */
-        if (imp.graph_only && !errs.count && r && r->root)
-            introlist_from_graph(&intro, imp.graph, r);
+        if (imp.graph_only && !errs.count && r && r->root) {
+            int edited = o.move_spec || o.graft_spec || o.prune_spec || o.rotate_spec;
+            if (edited) {
+                /* re-pin the events onto the edited base tree: derive the event
+                 * list from the imported graph and rebuild on the edited r. An
+                 * edit that removed an endpoint makes graph_construct fail --
+                 * the edit is refused (error), the read is not. */
+                IntroList ev; introlist_init(&ev);
+                introlist_events(&ev, imp.graph);
+                cgraph = graph_construct(r, &ev, 0, &errs);
+                introlist_free(&ev);
+                if (cgraph) introlist_from_graph(&intro, cgraph, r);
+            } else {
+                introlist_from_graph(&intro, imp.graph, r);
+            }
+        }
         /* internal nodes of the resulting tree (includes auto-created ones) */
         if (r->root) n_joins = treenode_count_internal(r->root);
     }
@@ -476,7 +490,7 @@ int main(int argc, char **argv)
         char *newick = NULL, *block = NULL; int filled = 0; int *counts = NULL;
         if (!errs.count && r && r->root) {
             treenode_collect_leaves(r->root, &taxa, &n_taxa, &tcap);
-            newick = result_newick(imp.graph_only ? imp.graph : cgraph, r, &intro);
+            newick = result_newick(cgraph ? cgraph : (imp.graph_only ? imp.graph : NULL), r, &intro);
             block = species_block(taxa, n_taxa, newick, imap, &filled, &counts);
         }
         emit_json(stdout, &o, r, taxa, n_taxa, n_joins, newick, block,
@@ -491,7 +505,7 @@ int main(int argc, char **argv)
         if (!errs.count && r && r->root) {
             TreeNode **taxa = NULL; int n_taxa = 0, tcap = 0;
             treenode_collect_leaves(r->root, &taxa, &n_taxa, &tcap);
-            char *newick = result_newick(imp.graph_only ? imp.graph : cgraph, r, &intro);
+            char *newick = result_newick(cgraph ? cgraph : (imp.graph_only ? imp.graph : NULL), r, &intro);
             int filled = 0; int *counts = NULL;
             char *block = species_block(taxa, n_taxa, newick, imap, &filled, &counts);
             char *migblk = mig.count ? migration_block(&mig, r) : NULL;

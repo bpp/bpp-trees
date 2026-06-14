@@ -391,6 +391,9 @@ GraphEvent *graph_events(const Graph *g, int *n_out)
         ev[k].phi   = !H->tau_secondary ? H->phi : 1.0 - H->phi;
         int yes = H->tau_primary + H->tau_secondary;
         ev[k].model = yes == 2 ? 'A' : yes == 1 ? 'B' : 'C';
+        int donor_is_secondary = (dp == H->secondary_parent);
+        ev[k].tau_src = donor_is_secondary ? H->tau_secondary : H->tau_primary;
+        ev[k].tau_dst = donor_is_secondary ? H->tau_primary   : H->tau_secondary;
         k++;
     }
     return ev;

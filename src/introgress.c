@@ -361,7 +361,8 @@ int introlist_needs_graph(const IntroList *g)
     return 0;
 }
 
-Graph *graph_construct(const Resolution *r, const IntroList *events, DiagList *errs)
+Graph *graph_construct(const Resolution *r, const IntroList *events,
+                       int check_names, DiagList *errs)
 {
     if (!r || !r->root) return NULL;
     Graph *g = graph_alloc();
@@ -415,12 +416,15 @@ Graph *graph_construct(const Resolution *r, const IntroList *events, DiagList *e
 
         char *name = NULL;
         if (e->label) {
-            if (strchr(e->label, '_')) {
+            /* check_names is off when re-pinning an imported network: its hybrid
+             * labels are already valid and may legitimately contain '_' (e.g.
+             * the akey 'nh_hyb') -- only user-supplied names are constrained. */
+            if (check_names && strchr(e->label, '_')) {
                 diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
                     "introgression: name '%s' must not contain '_'.", e->label);
                 ok = 0; break;
             }
-            if (name_used(names, ne, r, e->label)) {
+            if (check_names && name_used(names, ne, r, e->label)) {
                 diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
                     "introgression: name '%s' is already a tip, clade, or event.", e->label);
                 ok = 0; break;
@@ -470,7 +474,7 @@ Graph *graph_construct(const Resolution *r, const IntroList *events, DiagList *e
     return g;
 }
 
-void introlist_from_graph(IntroList *g, const Graph *gr, Resolution *r)
+void introlist_events(IntroList *g, const Graph *gr)
 {
     int n = 0;
     GraphEvent *ev = graph_events(gr, &n);
@@ -482,14 +486,20 @@ void introlist_from_graph(IntroList *g, const Graph *gr, Resolution *r)
         e->phi   = ev[k].phi;
         e->phi2  = -1.0;
         e->bidir = 0;
-        /* src/dst chosen so model_letter() reproduces the graph's model: a
-         * TAU_BRANCH ('own tau') counts as one 'yes'. A=2, B=1, C=0. */
-        int yes = ev[k].model == 'A' ? 2 : ev[k].model == 'B' ? 1 : 0;
-        e->src = yes >= 1 ? TAU_BRANCH : TAU_NODE;
-        e->dst = yes >= 2 ? TAU_BRANCH : TAU_NODE;
+        e->src = ev[k].tau_src ? TAU_BRANCH : TAU_NODE;   /* donor-edge own-tau */
+        e->dst = ev[k].tau_dst ? TAU_BRANCH : TAU_NODE;   /* recipient-edge own-tau */
+    }
+    graph_events_free(ev, n);
+}
 
-        /* mark the resolved base tree (a population may be donor/recipient of
-         * more than one event -- stacked pulses -- so just append markers). */
+void introlist_from_graph(IntroList *g, const Graph *gr, Resolution *r)
+{
+    int base = g->count;
+    introlist_events(g, gr);
+    /* mark the resolved base tree (a population may be donor/recipient of more
+     * than one event -- stacked pulses -- so just append markers). */
+    for (int k = base; k < g->count; k++) {
+        IntroEvent *e = &g->items[k];
         TreeNode *D = resolution_find(r, e->donor);
         TreeNode *R = resolution_find(r, e->recip);
         if (D && !D->is_leaf) D->show_label = 1;
@@ -502,7 +512,6 @@ void introlist_from_graph(IntroList *g, const Graph *gr, Resolution *r)
         if (D) treenode_add_intro(D, dm, k + 1);
         if (R) treenode_add_intro(R, rm, k + 1);
     }
-    graph_events_free(ev, n);
 }
 
 /* --- extended-Newick emission ------------------------------------------ */

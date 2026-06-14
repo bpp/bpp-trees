@@ -90,6 +90,8 @@ typedef struct {
     char  *recip;   /* base-tree recipient population name (owned) */
     double phi;     /* donor's contribution as displayed, in (0,1) */
     char   model;   /* 'A' | 'B' | 'C' */
+    int    tau_src; /* donor-edge own-tau (1 = branch/yes) -- for reconstruction */
+    int    tau_dst; /* recipient-edge own-tau (1 = branch/yes) */
 } GraphEvent;
 
 /* One GraphEvent per hybrid (count = g->n_hybrids), in node order. Names are

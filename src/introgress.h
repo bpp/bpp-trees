@@ -73,9 +73,19 @@ int  introlist_needs_graph(const IntroList *g);
  * each event by inserting a hybrid node immediately above the recipient and an
  * anonymous donor-attachment above the donor (latest event innermost = stacking).
  * Endpoints resolve to a tip, a clade (resolution_find), or a prior event's
- * name. Returns NULL on an unresolved/invalid event (diagnostic appended); the
- * caller then reports errors. Caller frees with graph_free. */
-Graph *graph_construct(const Resolution *r, const IntroList *events, DiagList *errs);
+ * name. With check_names set, user-supplied names are validated (unique, no
+ * '_', no tip/clade/event collision); pass 0 when re-pinning an imported
+ * network whose hybrid labels are already valid (and may contain '_'). Returns
+ * NULL on an unresolved/invalid event (diagnostic appended). Caller frees with
+ * graph_free. */
+Graph *graph_construct(const Resolution *r, const IntroList *events,
+                       int check_names, DiagList *errs);
+
+/* Append one event per reticulation (donor/recipient base-tree populations,
+ * phi, model via src/dst) derived from the graph -- the event list that,
+ * replayed by graph_construct, rebuilds the network. No Resolution needed and
+ * no display side effects; used to re-pin events after a base-tree edit. */
+void introlist_events(IntroList *g, const Graph *gr);
 
 /* Populate `g` (assumed empty) from a stacked network carried as a graph, and
  * mark the resolved base tree for display: one event per reticulation with the
