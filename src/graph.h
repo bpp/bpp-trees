@@ -67,12 +67,6 @@ GraphNode *graph_new_node(Graph *g, const char *label);
 /* Append child to parent's child list (does not set parent pointers). */
 void       graph_add_child(GraphNode *parent, GraphNode *child);
 
-/* 1 if the network is representable by the legacy flat event list: no hybrid
- * sits on another hybrid's lineage (no stacking). 0 means at least one
- * reticulation stacks on another -- only the graph can represent it. A graph
- * with no hybrids is trivially simple. */
-int    graph_is_simple(const Graph *g);
-
 /* Serialise the BASE species tree (no trailing ';'): drop every secondary
  * (introgression) edge and suppress each hybrid node and each now-unary
  * donor-attachment node, keeping the real internal clade labels. This is the

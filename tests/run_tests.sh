@@ -669,6 +669,15 @@ chk_contains ti123 "$("$BIN" --joins "$CBASE" --introgression 'MOD->NEAN=h_1 phi
 # A reciprocal pair is still rejected (not stacking; use a <-> event).
 chk_contains ti124 "$("$BIN" --joins 'A+B,A_B+C' --introgression 'C->A ; A->C' 2>&1)" 'more than one event'
 
+# Unification: every MSC-I import (incl. model A, both tau-parent=yes) now goes
+# through the graph. Re-reading a model-A network must preserve the DONOR's phi
+# (0.2), not its complement -- a regression guard for the normalized-phi path.
+"$BIN" --joins 'A+B,C+D,A_B+C_D' --introgression 'A_B->C_D phi=0.2' --out "$TMP/ma" --quiet 2>/dev/null
+maL="$("$BIN" --read "$TMP/ma.stree" --display --ascii 2>&1)"
+chk_contains ti132 "$maL" "A_B $SQ C_D"
+chk_contains ti133 "$maL" 'phi=0.2'
+chk_contains ti134 "$maL" '[model A]'
+
 # --- EDITING a stacked (graph-carried) network (step 5) ------------------
 # Editing the base tree must re-pin the events: the events are derived from the
 # graph, the edit lands on the base tree, and the network is rebuilt. Before

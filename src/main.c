@@ -453,26 +453,26 @@ int main(int argc, char **argv)
                 introlist_free(&intro); introlist_init(&intro);
                 introlist_from_graph(&intro, cgraph, r);
             }
-        } else if (intro.count && !errs.count && r->root) {
+        } else if (intro.count && !errs.count && r->root && !imp.graph_only) {
             introlist_apply(&intro, r, &errs);
         }
-        /* a stacked network imported as a graph derives its legend/markers
-         * (and JSON/note) directly from the graph -- it cannot go through the
-         * flat-list introlist_apply (a lineage hosts several events). */
+        /* An imported MSC-I network is carried as a graph: its events are already
+         * in `intro` (copied from imp.intro). Re-emission comes from the graph,
+         * so here we only mark the base tree for display -- and, if the tree was
+         * edited, re-pin the events by rebuilding the graph on the edited tree. */
         if (imp.graph_only && !errs.count && r && r->root) {
             int edited = o.move_spec || o.graft_spec || o.prune_spec || o.rotate_spec;
             if (edited) {
-                /* re-pin the events onto the edited base tree: derive the event
-                 * list from the imported graph and rebuild on the edited r. An
-                 * edit that removed an endpoint makes graph_construct fail --
+                /* an edit that removed an endpoint makes graph_construct fail --
                  * the edit is refused (error), the read is not. */
                 IntroList ev; introlist_init(&ev);
                 introlist_events(&ev, imp.graph);
                 cgraph = graph_construct(r, &ev, 0, &errs);
                 introlist_free(&ev);
+                introlist_free(&intro); introlist_init(&intro);
                 if (cgraph) introlist_from_graph(&intro, cgraph, r);
             } else {
-                introlist_from_graph(&intro, imp.graph, r);
+                introlist_mark(&intro, r);   /* intro already holds the imported events */
             }
         }
         /* internal nodes of the resulting tree (includes auto-created ones) */

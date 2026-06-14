@@ -122,7 +122,11 @@ static char *node_name(const NwkNode *n);    /* forward decl: defined below */
 
 /* Recover MSC-I events from doubled hybrid labels. Builds events into
  * im->intro and rewrites the tree in place to its base topology by removing
- * bare-reference occurrences. Returns 1 if any MSC-I annotation was found. */
+ * bare-reference occurrences. Returns 1 if any MSC-I annotation was found.
+ *
+ * Models A/B/C now import through the network graph (graph_from_newick); this
+ * heuristic recovery survives only as the fallback for model-D (bidirectional)
+ * networks, which the graph does not yet represent. */
 /* Count occurrences of a label in the tree. */
 static int label_count(NwkNode *n, const char *L)
 {
@@ -518,21 +522,23 @@ int import_read(const char *path, Import *im, DiagList *errs)
     free(nwk);
     if (!root) { return 0; }
 
-    /* Build the faithful network graph first. A STACKED network (a reticulation
-     * on another reticulation's lineage, e.g. M3) cannot be expressed as a flat
-     * list of branch-keyed events, so the heuristic recovery below would mangle
-     * it. Carry such a network as the graph: derive the base tree from it and
-     * re-emit by serialising the graph (see graph_only in import.h). Simple
-     * networks, model D (graph returns NULL), and plain trees keep the existing
-     * recovery path unchanged -- build on a scratch diag so its notes don't
-     * leak into a run we then fall back from. */
+    /* Build the faithful network graph. EVERY MSC-I network (models A/B/C,
+     * stacked or not) is now carried as the graph: the base tree follows native
+     * (own-tau) edges -- BPP's species tree -- and re-emission serialises the
+     * graph directly (faithful + idempotent), replacing the heuristic recovery.
+     * Only model D (graph returns NULL) and plain trees (no hybrids) keep the
+     * legacy path. Build on a scratch diag so model-D notes don't leak into a
+     * run we then fall back from. */
     DiagList scratch; diag_init(&scratch);
     Graph *g = graph_from_newick(root, &scratch);
     diag_free(&scratch);
-    if (g && !graph_is_simple(g)) {
+    if (g && g->n_hybrids > 0) {
         im->graph = g;
         im->graph_only = 1;
         im->had_msci = 1;
+        /* expose the events as a flat list too, so consumers that read im->intro
+         * (the REPL, JSON) see them without touching the graph. */
+        introlist_events(&im->intro, g);
         char *base = graph_base_newick(g);
         NwkNode *broot = base ? nwk_parse_root(base, errs) : NULL;
         free(base);

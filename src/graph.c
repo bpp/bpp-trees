@@ -217,6 +217,24 @@ Graph *graph_from_newick(const NwkNode *root, DiagList *errs)
         }
     }
 
+    /* Normalise to native edges. The eNewick puts the recipient subtree at the
+     * "definition" occurrence, but in a Model-B SWAP the native (own-tau,
+     * tau-parent=yes) parent is the BARE occurrence -- so the subtree sits on
+     * the donor side. Make primary_parent the native side: the base tree then
+     * follows native edges (BPP's species tree, e.g. yeast's Sbay basal) and
+     * re-emission is the swapped form BPP reads identically. The recipient
+     * subtree stays H's child; only the parent roles and phi orientation swap. */
+    for (int i = 0; i < ht.n && !bad; i++) {
+        GraphNode *H = ht.ent[i].node;
+        if (!H->tau_primary && H->tau_secondary) {
+            GraphNode *t = H->primary_parent;
+            H->primary_parent = H->secondary_parent;
+            H->secondary_parent = t;
+            H->tau_primary = 1; H->tau_secondary = 0;
+            H->phi = 1.0 - H->phi;          /* phi is now the weight on the new (donor) edge */
+        }
+    }
+
     free(ht.ent);
     if (bad) { graph_free(g); return NULL; }
     return g;
@@ -262,19 +280,6 @@ char *graph_to_newick(const Graph *g)
 }
 
 /* --- base-tree projection ------------------------------------------------ */
-
-int graph_is_simple(const Graph *g)
-{
-    if (!g) return 1;
-    for (int i = 0; i < g->n_nodes; i++) {
-        const GraphNode *n = g->nodes[i];
-        if (!n->is_hybrid) continue;
-        if ((n->primary_parent   && n->primary_parent->is_hybrid) ||
-            (n->secondary_parent && n->secondary_parent->is_hybrid))
-            return 0;                            /* a reticulation stacks on another */
-    }
-    return 1;
-}
 
 /* Emit n's base subtree: skip the secondary (donor-ref) children, then suppress
  * this node if it is a hybrid or has collapsed to a single child (a donor
@@ -377,10 +382,11 @@ GraphEvent *graph_events(const Graph *g, int *n_out)
             if (c->is_hybrid && c->secondary_parent == H) continue;
             recip = c; break;
         }
-        /* donor edge is the tau-parent=no side; donor node is its other child */
-        const GraphNode *dp = !H->tau_secondary ? H->secondary_parent
-                            : !H->tau_primary   ? H->primary_parent
-                                                : H->secondary_parent; /* A: pick 2ndary */
+        /* After normalisation the donor is ALWAYS the secondary (introgression)
+         * side, and H->phi is its contribution along that edge -- no complement,
+         * no model-dependent side choice. The donor node is the secondary
+         * parent's other child. */
+        const GraphNode *dp = H->secondary_parent;
         const GraphNode *donor = NULL;
         if (dp) for (int j = 0; j < dp->n_children; j++)
             if (dp->children[j] != H) { donor = dp->children[j]; break; }
@@ -388,12 +394,11 @@ GraphEvent *graph_events(const Graph *g, int *n_out)
         ev[k].name  = xstrdup(H->label ? H->label : "?");
         ev[k].recip = recip ? project_name(recip) : xstrdup("?");
         ev[k].donor = donor ? project_name(donor) : xstrdup("?");
-        ev[k].phi   = !H->tau_secondary ? H->phi : 1.0 - H->phi;
+        ev[k].phi   = H->phi;
         int yes = H->tau_primary + H->tau_secondary;
         ev[k].model = yes == 2 ? 'A' : yes == 1 ? 'B' : 'C';
-        int donor_is_secondary = (dp == H->secondary_parent);
-        ev[k].tau_src = donor_is_secondary ? H->tau_secondary : H->tau_primary;
-        ev[k].tau_dst = donor_is_secondary ? H->tau_primary   : H->tau_secondary;
+        ev[k].tau_src = H->tau_secondary;   /* donor-edge own-tau */
+        ev[k].tau_dst = H->tau_primary;     /* recipient-edge own-tau */
         k++;
     }
     return ev;

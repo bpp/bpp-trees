@@ -87,6 +87,11 @@ Graph *graph_construct(const Resolution *r, const IntroList *events,
  * no display side effects; used to re-pin events after a base-tree edit. */
 void introlist_events(IntroList *g, const Graph *gr);
 
+/* Place display markers on the resolved base tree for the events already in
+ * `g` (donor "NAME⇝", recipient "⇝NAME(.P)"), and flag donor clades to show
+ * their label. */
+void introlist_mark(IntroList *g, Resolution *r);
+
 /* Populate `g` (assumed empty) from a stacked network carried as a graph, and
  * mark the resolved base tree for display: one event per reticulation with the
  * donor/recipient base-tree populations, displayed phi, and model letter (via

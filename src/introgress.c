@@ -492,13 +492,11 @@ void introlist_events(IntroList *g, const Graph *gr)
     graph_events_free(ev, n);
 }
 
-void introlist_from_graph(IntroList *g, const Graph *gr, Resolution *r)
+void introlist_mark(IntroList *g, Resolution *r)
 {
-    int base = g->count;
-    introlist_events(g, gr);
     /* mark the resolved base tree (a population may be donor/recipient of more
      * than one event -- stacked pulses -- so just append markers). */
-    for (int k = base; k < g->count; k++) {
+    for (int k = 0; k < g->count; k++) {
         IntroEvent *e = &g->items[k];
         TreeNode *D = resolution_find(r, e->donor);
         TreeNode *R = resolution_find(r, e->recip);
@@ -512,6 +510,12 @@ void introlist_from_graph(IntroList *g, const Graph *gr, Resolution *r)
         if (D) treenode_add_intro(D, dm, k + 1);
         if (R) treenode_add_intro(R, rm, k + 1);
     }
+}
+
+void introlist_from_graph(IntroList *g, const Graph *gr, Resolution *r)
+{
+    introlist_events(g, gr);
+    introlist_mark(g, r);
 }
 
 /* --- extended-Newick emission ------------------------------------------ */
