@@ -79,13 +79,15 @@ int  introlist_needs_graph(const IntroList *g);
  * each event by inserting a hybrid node immediately above the recipient and an
  * anonymous donor-attachment above the donor (latest event innermost = stacking).
  * Endpoints resolve to a tip, a clade (resolution_find), or a prior event's
- * name. With check_names set, user-supplied names are validated (unique, no
- * '_', no tip/clade/event collision); pass 0 when re-pinning an imported
- * network whose hybrid labels are already valid (and may contain '_'). Returns
- * NULL on an unresolved/invalid event (diagnostic appended). Caller frees with
- * graph_free. */
+ * name. The first `trust_prefix` events have their names trusted (already
+ * validated when added, or imported and known good even if they contain '_');
+ * events at index >= trust_prefix have user-name rules enforced -- unique,
+ * no '_', no tip/clade/prior-event collision. Use 0 to check every event,
+ * events->count to check none, or N to check only the tail (REPL adding to
+ * an imported list). Returns NULL on an unresolved/invalid event (diagnostic
+ * appended). Caller frees with graph_free. */
 Graph *graph_construct(const Resolution *r, const IntroList *events,
-                       int check_names, DiagList *errs);
+                       int trust_prefix, DiagList *errs);
 
 /* Append one event per reticulation (donor/recipient base-tree populations,
  * phi, model via src/dst) derived from the graph -- the event list that,

@@ -385,7 +385,7 @@ int introlist_needs_graph(const IntroList *g)
 }
 
 Graph *graph_construct(const Resolution *r, const IntroList *events,
-                       int check_names, DiagList *errs)
+                       int trust_prefix, DiagList *errs)
 {
     if (!r || !r->root) return NULL;
     Graph *g = graph_alloc();
@@ -439,15 +439,16 @@ Graph *graph_construct(const Resolution *r, const IntroList *events,
 
         char *name = NULL;
         if (e->label) {
-            /* check_names is off when re-pinning an imported network: its hybrid
-             * labels are already valid and may legitimately contain '_' (e.g.
-             * the akey 'nh_hyb') -- only user-supplied names are constrained. */
-            if (check_names && strchr(e->label, '_')) {
+            /* Trust the first `trust_prefix` events: they were validated at
+             * add-time, or are imported from a network where labels with '_'
+             * (e.g. akey 'nh_hyb') are legitimate. Only the tail is checked. */
+            int check = (k >= trust_prefix);
+            if (check && strchr(e->label, '_')) {
                 diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
                     "introgression: name '%s' must not contain '_'.", e->label);
                 ok = 0; break;
             }
-            if (check_names && name_used(names, ne, r, e->label)) {
+            if (check && name_used(names, ne, r, e->label)) {
                 diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
                     "introgression: name '%s' is already a tip, clade, or event.", e->label);
                 ok = 0; break;

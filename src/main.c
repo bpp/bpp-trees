@@ -448,7 +448,7 @@ int main(int argc, char **argv)
          * prior event) is built as a graph; the flat introlist_apply cannot
          * represent it. The display list is then re-derived from the graph. */
         if (o.introgression_spec && !errs.count && r->root && introlist_needs_graph(&intro)) {
-            cgraph = graph_construct(r, &intro, 1, &errs);
+            cgraph = graph_construct(r, &intro, 0, &errs);   /* check every event */
             if (cgraph) {
                 introlist_free(&intro); introlist_init(&intro);
                 introlist_from_graph(&intro, cgraph, r);
@@ -469,7 +469,7 @@ int main(int argc, char **argv)
                 IntroList ev; introlist_init(&ev);
                 introlist_events(&ev, imp.graph);
                 introlist_drop_orphans(&ev, r, &warns);
-                cgraph = ev.count ? graph_construct(r, &ev, 0, &errs) : NULL;
+                cgraph = ev.count ? graph_construct(r, &ev, ev.count, &errs) : NULL;
                 introlist_free(&ev);
                 introlist_free(&intro); introlist_init(&intro);
                 if (cgraph) introlist_from_graph(&intro, cgraph, r);

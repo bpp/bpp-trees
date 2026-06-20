@@ -339,6 +339,34 @@ chk_contains ti29 "$smig" 'added migration M1'
 chk_contains ti30 "$smig" 'migration = 2'
 chk_contains ti31 "$smig" 'do not coexist'      # A_B->A rejected (A is inside A_B)
 
+# REPL stacking: two pulses on the same recipient (NEAN->HUMAN, then A->HUMAN).
+# Used to be refused with "a hybrid node has two parents"; now routes through
+# the graph constructor like the CLI, so it commits and emits stacked eNewick.
+sstk="$(printf 'A+B=AB\nC+D=CD\nAB+CD=R\nintrogress A->C\nintrogress B->C\nintro\nnwk\nquit\n' | "$BIN" -i 2>&1)"
+chk_contains tirepl_stk1 "$sstk" 'added introgression H1'
+chk_contains tirepl_stk2 "$sstk" 'added introgression H2'
+chk_contains tirepl_stk3 "$sstk" 'H1:  A'        # legend lists both events
+chk_contains tirepl_stk4 "$sstk" 'H2:  B'
+chk_contains tirepl_stk5 "$sstk" ')H2[&tau-parent=yes])H1[&tau-parent=yes]'   # stacked emit
+# Self-loop is still rejected through the graph path.
+sbad="$(printf 'A+B\nintrogress A->A\nquit\n' | "$BIN" -i 2>&1)"
+chk_contains tirepl_stk6 "$sbad" 'donor and recipient are the same'
+
+# Stacking onto an IMPORTED event whose label contains '_' (akey-style 'nh_hyb').
+# The new event's name is validated; existing imported labels are trusted -- the
+# old behaviour erroneously re-checked them and rejected the underscore.
+cat > "$TMP/single_nh.stree" <<EOF
+species&tree = 4 NEAN GBR AFR1 AFR2
+                 1    1   1    1
+                 ((NEAN,(GBR)nh_hyb[&phi=0.05,&tau-parent=no]),(nh_hyb[&tau-parent=yes],(AFR1,AFR2)A));
+EOF
+snh="$(printf 'read %s\nintrogress AFR1->GBR\nintro\nquit\n' "$TMP/single_nh.stree" | "$BIN" -i 2>&1)"
+chk_contains tirepl_stk7 "$snh" 'added introgression H1'
+chk_contains tirepl_stk8 "$snh" 'nh_hyb:'         # the imported event survives
+chk_contains tirepl_stk9 "$snh" 'H1:  AFR1'       # the new event was committed
+[[ "$snh" != *"must not contain '_'"* ]] && pass=$((pass+1)) || \
+    { fail=$((fail+1)); echo "FAIL tirepl_stk10: imported '_' label rejected"; }
+
 # session persistence: named trees are saved (scratch 'main' is not), restored
 printf 'A+B\nnew keep\nX+Y\nsession save %s/sess\nquit\n' "$TMP" | "$BIN" -i >/dev/null 2>&1
 sfile="$(cat "$TMP/sess" 2>/dev/null)"

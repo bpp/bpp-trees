@@ -11,6 +11,7 @@
 #include "block.h"
 #include "migrate.h"
 #include "introgress.h"
+#include "graph.h"
 #include "import.h"
 #include "lineedit.h"
 
@@ -135,6 +136,42 @@ static int ws_add(Workspace *ws, NamedTree t)
 
 static NamedTree *ws_active(Workspace *ws) { return &ws->trees[ws->active]; }
 
+/* --- introgression rendering -------------------------------------------- */
+
+/* Apply the active tree's introgression events for display / output.
+ *
+ * Sets labels and tree-display markers on `r` (consumed by treenode_display
+ * and introgress_legend), and returns the (extended-)Newick body of the
+ * resulting tree -- a plain tree when no events, eNewick otherwise.
+ *
+ *   - flat (one pulse per recipient): introlist_apply + introgress_newick.
+ *   - stacked (a recipient hosts more than one event, or an endpoint names a
+ *     prior event): graph_construct + graph_to_newick; the flat list can't
+ *     hold this shape, so markers come from introlist_from_graph.
+ *
+ * On validation failure `errs` carries the reason and NULL is returned (the
+ * caller decides whether to print a fallback). `marks` is initialised
+ * regardless; the caller frees it with introlist_free. */
+static char *intro_render(const NamedTree *t, Resolution *r, IntroList *marks, DiagList *errs)
+{
+    introlist_init(marks);
+    if (!t->intro.count) return treenode_to_newick(r->root);
+
+    if (introlist_needs_graph(&t->intro)) {
+        /* All events are already-committed: trust their names (may include
+         * imported labels with '_' like akey 'nh_hyb'). */
+        Graph *gr = graph_construct(r, &t->intro, t->intro.count, errs);
+        if (!gr) return NULL;
+        introlist_from_graph(marks, gr, r);
+        char *body = graph_to_newick(gr);
+        graph_free(gr);
+        return body;
+    }
+    introlist_copy(marks, &t->intro);
+    if (!introlist_apply(marks, r, errs)) return NULL;
+    return introgress_newick(marks, r);
+}
+
 /* --- printing ----------------------------------------------------------- */
 
 static void print_diags(const DiagList *d, const char *kind)
@@ -215,13 +252,14 @@ static void cmd_display(const NamedTree *t, int ascii)
     if (r->root) {
         DiagList me; diag_init(&me);
         miglist_apply(&t->mig, r, &me);          /* annotate nodes; collect errors */
-        IntroList intro_copy; introlist_copy(&intro_copy, &t->intro);
-        introlist_apply(&intro_copy, r, &me);
+        IntroList marks;
+        char *body = intro_render(t, r, &marks, &me);
+        free(body);                               /* display doesn't need it */
         treenode_display(r->root, stdout, ascii, "");
         int color = treenode_use_color(ascii, stdout);
         if (t->mig.count)   { printf("\n"); migration_legend(&t->mig, r, stdout, color); }
-        if (t->intro.count) { printf("\n"); introgress_legend(&intro_copy, r, stdout, color); }
-        introlist_free(&intro_copy);
+        if (t->intro.count) { printf("\n"); introgress_legend(&marks, r, stdout, color); }
+        introlist_free(&marks);
         print_diags(&me, "error");               /* any invalid bands/events */
         diag_free(&me);
     } else {
@@ -240,18 +278,16 @@ static void cmd_newick(const NamedTree *t)
     Resolution *r = tree_build(t, &joins, &errs, &warns);
 
     if (r->root) {
-        char *body;
-        if (t->intro.count) {
-            IntroList ic; introlist_copy(&ic, &t->intro);
-            DiagList ie; diag_init(&ie);
-            introlist_apply(&ic, r, &ie);            /* set labels, show_label */
-            body = introgress_newick(&ic, r);
-            introlist_free(&ic); diag_free(&ie);
+        IntroList marks;
+        DiagList ie; diag_init(&ie);
+        char *body = intro_render(t, r, &marks, &ie);
+        if (body) {
+            printf("%s;\n", body);
+            free(body);
         } else {
-            body = treenode_to_newick(r->root);
+            print_diags(&ie, "error");
         }
-        printf("%s;\n", body);
-        free(body);
+        introlist_free(&marks); diag_free(&ie);
     } else {
         print_diags(&errs, "error");
         printf("(tree is incomplete — no Newick yet)\n");
@@ -448,13 +484,12 @@ static void cmd_block(const NamedTree *t, const char *arg)
      * labelled and the eNewick form is emitted when there are introgressions */
     DiagList me; diag_init(&me);
     int migok = miglist_apply(&t->mig, r, &me);
-    IntroList ic; introlist_copy(&ic, &t->intro);
-    int introok = introlist_apply(&ic, r, &me);
+    IntroList ic;
+    char *body = intro_render(t, r, &ic, &me);
+    if (!body) body = treenode_to_newick(r->root);   /* fallback on event error */
 
     TreeNode **taxa = NULL; int nt = 0, tc = 0;
     treenode_collect_leaves(r->root, &taxa, &nt, &tc);
-    char *body = introok && ic.count ? introgress_newick(&ic, r)
-                                     : treenode_to_newick(r->root);
     char *nwk = xasprintf("%s;", body);
     free(body);
 
@@ -779,10 +814,11 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
             DiagList e, w, ie; JoinList j;
             diag_init(&e); diag_init(&w); diag_init(&ie);
             Resolution *r = tree_build(t, &j, &e, &w);
-            IntroList ic; introlist_copy(&ic, &t->intro);
-            introlist_apply(&ic, r, &ie);
-            introgress_legend(&ic, r, stdout, treenode_use_color(0, stdout));
-            introlist_free(&ic);
+            IntroList ic;
+            char *body = intro_render(t, r, &ic, &ie);
+            if (body) introgress_legend(&ic, r, stdout, treenode_use_color(0, stdout));
+            else print_diags(&ie, "error");
+            free(body); introlist_free(&ic);
             resolution_free(r); joinlist_free(&j);
             diag_free(&e); diag_free(&w); diag_free(&ie);
             return;
@@ -822,11 +858,11 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
             Resolution *r = tree_build(t, &j, &e, &w);
             if (!r->root) {
                 printf("the active tree isn't complete yet — finish it first\n");
-            } else if (introlist_find_pair(&t->intro, tmp.items[0].donor, tmp.items[0].recip) >= 0) {
-                printf("an introgression event already exists between '%s' and '%s'\n",
-                       tmp.items[0].donor, tmp.items[0].recip);
             } else {
-                /* validate against a merged list so the recipient-once rule fires */
+                /* Validate against the merged list. Stacking (same recipient
+                 * named twice, or an endpoint naming a prior event) goes
+                 * through the graph constructor; everything else through the
+                 * flat introlist_apply. Same dispatch as the CLI. */
                 IntroList merged; introlist_copy(&merged, &t->intro);
                 IntroEvent *src = &tmp.items[0];
                 IntroEvent ev; memset(&ev, 0, sizeof ev);
@@ -839,7 +875,18 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
                     merged.items = xrealloc(merged.items, (size_t)merged.cap * sizeof(IntroEvent));
                 }
                 merged.items[merged.count++] = ev;
-                if (!introlist_apply(&merged, r, &ae)) {
+
+                int valid;
+                if (introlist_needs_graph(&merged)) {
+                    /* trust the prior events (already validated); check only
+                     * the new event's label, which sits at index t->intro.count. */
+                    Graph *gr = graph_construct(r, &merged, t->intro.count, &ae);
+                    valid = (gr != NULL);
+                    if (gr) graph_free(gr);
+                } else {
+                    valid = introlist_apply(&merged, r, &ae);
+                }
+                if (!valid) {
                     print_diags(&ae, "error");
                 } else {
                     /* commit a fresh copy of the validated new event into the tree */
@@ -856,13 +903,21 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
                     commit->bidir = src->bidir;
                     commit->src = src->src; commit->dst = src->dst;
                     commit->label = src->label ? xstrdup(src->label) : NULL;
-                    /* re-apply on the live tree to set labels and show_label */
+                    /* Re-render to read back the auto-assigned label. Both
+                     * flat and graph paths number events H1, H2, ... in input
+                     * order, so the new event's label is on the last item. */
                     DiagList junk; diag_init(&junk);
-                    IntroList c2; introlist_copy(&c2, &t->intro);
-                    introlist_apply(&c2, r, &junk);
+                    IntroList c2;
+                    char *b = intro_render(t, r, &c2, &junk);
+                    const char *name = "?";
+                    if (b) for (int i = 0; i < c2.count; i++)
+                        if (strcmp(c2.items[i].donor, src->donor) == 0 &&
+                            strcmp(c2.items[i].recip, src->recip) == 0 &&
+                            c2.items[i].label)
+                            name = c2.items[i].label;
                     printf("added introgression %s: %s \xe2\x87\x9d %s   phi=%g\n",
-                           c2.items[c2.count - 1].label, src->donor, src->recip, src->phi);
-                    introlist_free(&c2); diag_free(&junk);
+                           name, src->donor, src->recip, src->phi);
+                    free(b); introlist_free(&c2); diag_free(&junk);
                 }
                 introlist_free(&merged);
             }
