@@ -90,9 +90,11 @@ int       treenode_use_color(int ascii, FILE *fp);
 
 /* Print the subtree as an indented, root-at-left branching diagram. Each line
  * is prefixed with `lead`. Tips show their name; internal nodes show their
- * explicit label, or their implicit leaf-set label if unlabelled. `ascii`
- * selects plain ASCII connectors instead of Unicode box-drawing characters. */
+ * explicit label, or their implicit leaf-set label if unlabelled -- pass
+ * `hide_inner` non-zero to print internal nodes as just `┬` with no label
+ * (migration / introgression markers still render). `ascii` selects plain
+ * ASCII connectors instead of Unicode box-drawing characters. */
 void      treenode_display(const TreeNode *root, FILE *fp, int ascii,
-                           const char *lead);
+                           const char *lead, int hide_inner);
 
 #endif /* BPP_TREE_TREE_H */

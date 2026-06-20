@@ -524,7 +524,7 @@ int main(int argc, char **argv)
                 printf("Newick:\n  %s\n\n", newick);
                 if (o.display) {
                     printf("Tree:\n");
-                    treenode_display(r->root, stdout, o.ascii, "  ");
+                    treenode_display(r->root, stdout, o.ascii, "  ", 0);
                     if (mig.count) { printf("\n"); migration_legend(&mig, r, stdout, color); }
                     if (intro.count) { printf("\n"); introgress_legend(&intro, r, stdout, color); }
                     printf("\n");
@@ -544,7 +544,7 @@ int main(int argc, char **argv)
             /* --display alongside --newick-only / --validate: append the diagram */
             if (o.display && (o.newick_only || o.validate_only)) {
                 printf("Tree:\n");
-                treenode_display(r->root, stdout, o.ascii, "  ");
+                treenode_display(r->root, stdout, o.ascii, "  ", 0);
                 if (mig.count) { printf("\n"); migration_legend(&mig, r, stdout, color); }
                 if (intro.count) { printf("\n"); introgress_legend(&intro, r, stdout, color); }
             }

@@ -180,7 +180,7 @@ static void display_intro(const TreeNode *n, FILE *fp, int color)
 
 static void display_rec(const TreeNode *n, const char *prefix, int is_last,
                         int is_root, FILE *fp, const DisplayGlyphs *g,
-                        const char *lead, int color)
+                        const char *lead, int color, int hide_inner)
 {
     fputs(lead, fp);
     if (is_root) {
@@ -190,8 +190,10 @@ static void display_rec(const TreeNode *n, const char *prefix, int is_last,
         fputs(is_last ? g->last : g->mid, fp);
         fputs(n->is_leaf ? g->leaf : g->tee, fp);
     }
-    fputc(' ', fp);
-    fputs(display_label(n), fp);
+    if (!(hide_inner && !n->is_leaf)) {
+        fputc(' ', fp);
+        fputs(display_label(n), fp);
+    }
     display_mig(n, fp, color);
     display_intro(n, fp, color);
     fputc('\n', fp);
@@ -201,17 +203,18 @@ static void display_rec(const TreeNode *n, const char *prefix, int is_last,
     char *cp = is_root ? xstrdup(prefix)
                        : xasprintf("%s%s", prefix, is_last ? g->gap : g->vbar);
     for (int i = 0; i < n->n_children; i++)
-        display_rec(n->children[i], cp, i == n->n_children - 1, 0, fp, g, lead, color);
+        display_rec(n->children[i], cp, i == n->n_children - 1, 0, fp, g, lead, color, hide_inner);
     free(cp);
 }
 
-void treenode_display(const TreeNode *root, FILE *fp, int ascii, const char *lead)
+void treenode_display(const TreeNode *root, FILE *fp, int ascii,
+                      const char *lead, int hide_inner)
 {
     static const DisplayGlyphs uni = { "│ ", "  ", "├─", "└─", "┬", "─" };
     static const DisplayGlyphs asc = { "| ", "  ", "|-", "`-", "+", "-" };
     if (!root) return;
     display_rec(root, "", 1, 1, fp, ascii ? &asc : &uni, lead ? lead : "",
-                treenode_use_color(ascii, fp));
+                treenode_use_color(ascii, fp), hide_inner);
 }
 
 void treenode_recompute(TreeNode *node)

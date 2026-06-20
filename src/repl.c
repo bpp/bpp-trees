@@ -44,6 +44,8 @@ typedef struct {
     NamedTree *trees;
     int        n, cap;
     int        active;
+    int        hide_inner;     /* 'labels off' suppresses internal-node labels
+                                  in the indented display (default: shown) */
 } Workspace;
 
 /* --- tree ops ----------------------------------------------------------- */
@@ -271,7 +273,7 @@ static void try_transform(NamedTree *t, OpKind kind, const char *spec)
     diag_free(&baseline);
 }
 
-static void cmd_display(const NamedTree *t, int ascii)
+static void cmd_display(const NamedTree *t, int ascii, int hide_inner)
 {
     if (t->n_ops == 0) { printf("(empty tree — add joins first)\n"); return; }
     DiagList errs, warns; JoinList joins;
@@ -284,7 +286,7 @@ static void cmd_display(const NamedTree *t, int ascii)
         IntroList marks;
         char *body = intro_render(t, r, &marks, &me);
         free(body);                               /* display doesn't need it */
-        treenode_display(r->root, stdout, ascii, "");
+        treenode_display(r->root, stdout, ascii, "", hide_inner);
         int color = treenode_use_color(ascii, stdout);
         if (t->mig.count)   { printf("\n"); migration_legend(&t->mig, r, stdout, color); }
         if (t->intro.count) { printf("\n"); introgress_legend(&marks, r, stdout, color); }
@@ -818,6 +820,7 @@ static void print_help(void)
 "  rotate LIST        reverse the children of the named clade(s)\n"
 "  undo               undo the last change to the active tree\n"
 "  display [ascii]    show the active tree as a branching diagram\n"
+"  labels [on|off]    toggle internal-node labels in 'display' (no arg flips)\n"
 "  newick             print the active tree's Newick string\n"
 "  block [FILE]       print the species&tree block (to stdout, or write to FILE)\n"
 "  block replace FILE replace the species&tree block in a BPP control file\n"
@@ -1164,7 +1167,20 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
         return;
     }
     if (IS("display") || IS("show") || IS("d")) {
-        cmd_display(ws_active(ws), strcmp(arg, "ascii") == 0);
+        cmd_display(ws_active(ws), strcmp(arg, "ascii") == 0, ws->hide_inner);
+        return;
+    }
+    if (IS("labels")) {
+        /* labels [on|off]  -- toggle internal-node label rendering in
+         * 'display'. No arg flips the current setting. */
+        const char *want = arg;
+        int next;
+        if (!*want)                          next = !ws->hide_inner;     /* toggle */
+        else if (!strcmp(want, "on")  || !strcmp(want, "show")) next = 0;
+        else if (!strcmp(want, "off") || !strcmp(want, "hide")) next = 1;
+        else { printf("usage: labels [on|off]\n"); return; }
+        ws->hide_inner = next;
+        printf("internal labels: %s\n", ws->hide_inner ? "hidden" : "shown");
         return;
     }
     if (IS("move")) {
@@ -1372,7 +1388,7 @@ static const char *const COMMANDS[] = {
     "help", "quit", "exit", "display", "newick", "block", "read", "imap",
     "migration", "introgress", "hybrid", "taxa", "status", "trees", "history",
     "session", "save", "use", "new", "drop", "move", "graft", "prune",
-    "remove", "rotate", "random", "rtopology",
+    "remove", "rotate", "random", "rtopology", "labels",
     NULL
 };
 

@@ -445,6 +445,20 @@ cat > "$TMP/inner.nwk" <<'EOF'
 EOF
 exit_is ti_poly_inner 0 --read "$TMP/inner.nwk" --newick-only
 
+# 'labels off' suppresses internal-node labels in display; tips and markers
+# still render. The state is sticky across displays until toggled back.
+slbl="$(printf 'A+B\nC+D\nA_B+C_D\ndisplay ascii\nlabels off\ndisplay ascii\nlabels on\ndisplay ascii\nquit\n' | "$BIN" -i 2>&1)"
+chk_contains ti_lbl1 "$slbl" 'A_B_C_D'            # shown by default
+chk_contains ti_lbl2 "$slbl" 'internal labels: hidden'
+chk_contains ti_lbl3 "$slbl" 'internal labels: shown'
+# After 'labels off', the bare-+ line for the root has no trailing label.
+if echo "$slbl" | grep -qE '^\+$|^\+ *$'; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL ti_lbl4: bare '+' line missing after 'labels off'"; fi
+# Migration / introgression markers still render even with labels off.
+slbl2="$(printf 'A+B\nC+D\nA_B+C_D\nintrogress C->A\nlabels off\ndisplay ascii\nquit\n' | "$BIN" -i 2>&1)"
+chk_contains ti_lbl5 "$slbl2" 'C H1'
+chk_contains ti_lbl6 "$slbl2" 'A '$(printf '\xe2\x87\x9d')'H1'
+
 # --- MSC-I introgression -------------------------------------------------
 
 # CLI: model A network emits the canonical eNewick with phi on the donor ref
