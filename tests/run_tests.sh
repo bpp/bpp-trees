@@ -422,6 +422,29 @@ srt5="$(printf 'A+B\nnew f\nrandom 4 seed=4\nuse main\nrtopology f\nuse main\nnw
 chk_contains ti_rt8 "$srt5" "re-randomised 'f'"
 chk_contains ti_rt9 "$srt5" '(A,B);'                            # main untouched
 
+# Polytomy import: a Newick with a polytomy (>2 children at one node) is
+# left-folded into binary joins. Walk used to use the whole-node implicit
+# label as the running left operand of intermediate joins, so the resolver
+# saw the multi-taxa name referenced before any join built it
+# (AMBIGUOUS_CLADE). Reading a 21-way root polytomy must produce a valid
+# binary tree on the same 21 tips.
+cat > "$TMP/poly.nwk" <<'EOF'
+(t1,t2,t3,t4,t5,t6,t7,t8,t9,t10,t11,t12,t13,t14,t15,t16,t17,t18,t19,t20,t21);
+EOF
+exit_is ti_poly1 0 --read "$TMP/poly.nwk" --newick-only
+poly="$("$BIN" --read "$TMP/poly.nwk" --newick-only 2>&1)"
+# all 21 tips present in the output Newick
+for tip in t1 t11 t21; do
+    chk_contains "ti_poly_$tip" "$poly" "$tip"
+done
+[[ "$poly" != *"AMBIGUOUS_CLADE"* ]] && pass=$((pass+1)) || \
+    { fail=$((fail+1)); echo "FAIL ti_poly_err: AMBIGUOUS_CLADE on polytomy import"; }
+# Inner polytomy too (not just the root) -- a 3-way clade should fold cleanly.
+cat > "$TMP/inner.nwk" <<'EOF'
+((a,b,c),(d,e));
+EOF
+exit_is ti_poly_inner 0 --read "$TMP/inner.nwk" --newick-only
+
 # --- MSC-I introgression -------------------------------------------------
 
 # CLI: model A network emits the canonical eNewick with phi on the donor ref

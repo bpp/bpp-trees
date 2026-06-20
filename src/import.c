@@ -80,6 +80,27 @@ static char *implicit_label(const NwkNode *n)
     return s;
 }
 
+/* Implicit '_'-joined leaf-set label for just children[0..up_to] of `n` --
+ * the name of the partial clade that walk() will have built after folding
+ * those children with binary joins. For a binary node, up_to == 1 yields the
+ * whole node's label, so this is the right operand at every step of a
+ * polytomy's left-fold (where the whole-node label is wrong for early
+ * intermediate joins). */
+static char *partial_implicit_label(const NwkNode *n, int up_to)
+{
+    char *tmp[256] = {0}; int nleaf = 0;
+    for (int k = 0; k <= up_to; k++)
+        collect_leaf_names(n->children[k], tmp, &nleaf, 256);
+    qsort(tmp, (size_t)nleaf, sizeof(char *), cmp_strp);
+    size_t len = 0; for (int i = 0; i < nleaf; i++) len += strlen(tmp[i]) + 1;
+    char *s = xmalloc(len ? len : 1); s[0] = '\0';
+    for (int i = 0; i < nleaf; i++) {
+        if (i) strcat(s, "_");
+        strcat(s, tmp[i]);
+    }
+    return s;
+}
+
 static char *node_name(const NwkNode *n)
 {
     if (!n->n_children) return xstrdup(n->label ? n->label : "?");
@@ -99,20 +120,23 @@ static void walk(NwkNode *n, Import *im)
     char *left = node_name(n->children[0]);
     for (int i = 1; i < n->n_children; i++) {
         char *right = node_name(n->children[i]);
+        /* implicit label of the PARTIAL clade we've folded so far -- correct
+         * at every step of a polytomy, and equal to the whole-node label on
+         * the last iteration (so a binary node behaves as before). */
+        char *implicit = partial_implicit_label(n, i);
         /* Emit an explicit label only when the user gave one in the Newick AND
          * it differs from the implicit '_'-joined leaf-set label (which the
          * resolver auto-generates and which we forbid as an explicit label). */
-        char *implicit = (i == n->n_children - 1) ? implicit_label(n) : NULL;
         const char *lbl = NULL;
         if (i == n->n_children - 1 && n->label && *n->label &&
-            strcmp(n->label, implicit ? implicit : "") != 0)
+            strcmp(n->label, implicit) != 0)
             lbl = n->label;
         char *spec = lbl ? xasprintf("%s+%s=%s", left, right, lbl)
                          : xasprintf("%s+%s", left, right);
         im->joins = xrealloc(im->joins, (size_t)(im->n_joins + 1) * sizeof(char *));
         im->joins[im->n_joins++] = spec;
         free(right);
-        char *new_left = lbl ? xstrdup(lbl) : (implicit ? xstrdup(implicit) : implicit_label(n));
+        char *new_left = lbl ? xstrdup(lbl) : xstrdup(implicit);
         free(left); left = new_left;
         free(implicit);
     }
