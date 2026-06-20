@@ -184,7 +184,32 @@ static void print_diags(const DiagList *d, const char *kind)
     }
 }
 
-static void show_status(const NamedTree *t)
+/* Print just the warnings in `post` that are not already in `baseline`
+ * (matched on code + message; line_no is omitted in the REPL anyway). Used to
+ * suppress join-formula notes that were already shown before the edit. */
+static void print_diags_new(const DiagList *post, const DiagList *baseline,
+                            const char *kind)
+{
+    for (int i = 0; i < post->count; i++) {
+        const Diagnostic *w = &post->items[i];
+        int seen = 0;
+        for (int j = 0; baseline && j < baseline->count && !seen; j++) {
+            const Diagnostic *b = &baseline->items[j];
+            if (strcmp(w->code, b->code) == 0 && strcmp(w->message, b->message) == 0)
+                seen = 1;
+        }
+        if (!seen) {
+            printf("  %s [%s]: %s\n", kind, w->code, w->message);
+            if (w->hint) printf("      hint: %s\n", w->hint);
+        }
+    }
+}
+
+/* The status line plus errors, plus any NEW notes vs `baseline` (NULL =>
+ * every note is new). After an edit, the caller passes the pre-edit warn
+ * list so notes already triggered by the join formula stay quiet -- a rotate
+ * that just flips two siblings shouldn't re-narrate ROOT_AUTO_JOINED. */
+static void show_status_diff(const NamedTree *t, const DiagList *baseline)
 {
     if (t->n_ops == 0) {
         printf("[%s] empty — add joins, e.g.  A+B\n", t->name);
@@ -194,7 +219,7 @@ static void show_status(const NamedTree *t)
     diag_init(&errs); diag_init(&warns);
     Resolution *r = tree_build(t, &joins, &errs, &warns);
 
-    print_diags(&warns, "note");
+    print_diags_new(&warns, baseline, "note");
     print_diags(&errs, "error");
     printf("[%s] %d taxa, %s\n", t->name, r->n_leaves,
            r->root ? "tree complete" : "tree incomplete");
@@ -203,13 +228,15 @@ static void show_status(const NamedTree *t)
     diag_free(&errs); diag_free(&warns);
 }
 
+static void show_status(const NamedTree *t) { show_status_diff(t, NULL); }
+
 /* Apply a transform only if it succeeds on the current tree, so a failed edit
  * never gets committed (which would re-error on every later recompute). */
 static void try_transform(NamedTree *t, OpKind kind, const char *spec)
 {
-    JoinList joins; DiagList errs, warns;
-    diag_init(&errs); diag_init(&warns);
-    Resolution *r = tree_build(t, &joins, &errs, &warns);
+    JoinList joins; DiagList errs, baseline, edit_warns;
+    diag_init(&errs); diag_init(&baseline); diag_init(&edit_warns);
+    Resolution *r = tree_build(t, &joins, &errs, &baseline);   /* pre-edit warns */
     int ok = 0;
 
     if (!r->root) {
@@ -217,10 +244,10 @@ static void try_transform(NamedTree *t, OpKind kind, const char *spec)
         print_diags(&errs, "error");
     } else {
         DiagList te; diag_init(&te);
-        if      (kind == OP_MOVE)   resolution_move(r, spec, &te, &warns);
-        else if (kind == OP_ROTATE) resolution_rotate(r, spec, &te, &warns);
-        else if (kind == OP_GRAFT)  resolution_graft(r, spec, &te, &warns);
-        else                        resolution_prune(r, spec, &te, &warns);
+        if      (kind == OP_MOVE)   resolution_move(r, spec, &te, &edit_warns);
+        else if (kind == OP_ROTATE) resolution_rotate(r, spec, &te, &edit_warns);
+        else if (kind == OP_GRAFT)  resolution_graft(r, spec, &te, &edit_warns);
+        else                        resolution_prune(r, spec, &te, &edit_warns);
         if (te.count == 0) {
             ok = 1;
             /* The edit went through; any introgression events whose endpoint
@@ -237,9 +264,10 @@ static void try_transform(NamedTree *t, OpKind kind, const char *spec)
         diag_free(&te);
     }
     resolution_free(r); joinlist_free(&joins);
-    diag_free(&errs); diag_free(&warns);
+    diag_free(&errs); diag_free(&edit_warns);
 
-    if (ok) { tree_add_op(t, kind, spec); show_status(t); }
+    if (ok) { tree_add_op(t, kind, spec); show_status_diff(t, &baseline); }
+    diag_free(&baseline);
 }
 
 static void cmd_display(const NamedTree *t, int ascii)
