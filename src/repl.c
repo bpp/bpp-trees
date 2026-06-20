@@ -1249,7 +1249,11 @@ int repl_run(const char *seed_joins)
     History hist = {0};
     int quit = 0;
     char *line;
-    while (!quit && (line = line_edit("bpp-tree> ", &hist, repl_complete, &ws)) != NULL) {
+    char prompt[64];
+    while (!quit) {
+        snprintf(prompt, sizeof prompt, "bpp-tree[%s]> ", ws_active(&ws)->name);
+        line = line_edit(prompt, &hist, repl_complete, &ws);
+        if (!line) break;
         char *s = line;
         while (*s == ' ' || *s == '\t') s++;
         if (*s != '\0' && *s != '#') {
