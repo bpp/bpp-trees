@@ -21,6 +21,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 /* A tree is stored as the operations that build it: joins (declarative, an
@@ -322,6 +323,159 @@ static void cmd_newick(const NamedTree *t)
     }
     resolution_free(r); joinlist_free(&joins);
     diag_free(&errs); diag_free(&warns);
+}
+
+/* --- random tree generation -------------------------------------------- */
+
+/* The 1-indexed nth default tip name: a..z, then aa..zz, then aaa..zzz, etc.
+ * (a single repeated letter per name -- BPP species names cannot contain '_',
+ * and 'a, b ..., aa, bb' is what the user asked for). */
+static char *random_leaf_name(int n)
+{
+    int idx = n - 1, letter = idx % 26, count = idx / 26 + 1;
+    char *s = xmalloc((size_t)count + 1);
+    for (int i = 0; i < count; i++) s[i] = (char)('a' + letter);
+    s[count] = '\0';
+    return s;
+}
+
+/* Uniform random labelled binary topology by tip insertion: tips are added
+ * one by one, each placed on a uniformly-chosen edge of the current tree.
+ * After k tips the tree has 2k-1 edges (a leaf for each placement), so the
+ * total weight is (2n-3)!! -- the count of rooted labelled binary topologies,
+ * hence uniform. (Coalescent / Yule-style pair-picking is NOT uniform across
+ * topologies; it's uniform over ranked histories.) */
+static TreeNode *random_topology(char *const *names, int n_tips)
+{
+    TreeNode *root = treenode_leaf(names[0]);
+    TreeNode **edges = xmalloc((size_t)(2 * n_tips - 1) * sizeof *edges);
+    edges[0] = root;
+    int n_edges = 1;
+    for (int i = 1; i < n_tips; i++) {
+        int e = rand() % n_edges;
+        TreeNode *X = edges[e];
+        TreeNode *parent = X->parent;
+        TreeNode *M = treenode_internal(-1);
+        TreeNode *L = treenode_leaf(names[i]);
+        if (parent) {
+            for (int k = 0; k < parent->n_children; k++)
+                if (parent->children[k] == X) { parent->children[k] = M; break; }
+            M->parent = parent;
+        }
+        treenode_add_child(M, X);
+        treenode_add_child(M, L);
+        if (!parent) root = M;
+        edges[n_edges++] = L;
+        edges[n_edges++] = M;
+    }
+    free(edges);
+    treenode_recompute(root);
+    return root;
+}
+
+/* Walk a locally-built tree post-order, emitting one OP_JOIN per internal
+ * node as "child1_name+child2_name" (tip name, or implicit '_'-joined label
+ * for an internal). Implicit labels are set by treenode_recompute so when the
+ * resolver replays the joins, every child reference resolves. */
+static void emit_random_joins(NamedTree *t, TreeNode *node)
+{
+    if (node->is_leaf) return;
+    for (int i = 0; i < node->n_children; i++) emit_random_joins(t, node->children[i]);
+    const char *c1 = node->children[0]->is_leaf
+                     ? node->children[0]->name : node->children[0]->implicit_label;
+    const char *c2 = node->children[1]->is_leaf
+                     ? node->children[1]->name : node->children[1]->implicit_label;
+    char *spec = xasprintf("%s+%s", c1, c2);
+    tree_add_op(t, OP_JOIN, spec);
+    free(spec);
+}
+
+/* treenode_free is shallow (the resolver owns nodes flatly); for the tree we
+ * built ourselves we have to walk children explicitly. */
+static void free_random_tree(TreeNode *n)
+{
+    if (!n) return;
+    for (int i = 0; i < n->n_children; i++) free_random_tree(n->children[i]);
+    treenode_free(n);
+}
+
+/* Replace the active tree with a uniform-random binary topology on N tips
+ * using the default tip names (a, b, ..., z, aa, bb, ...). The prior state
+ * (joins, migration, introgression) is cleared -- 'random' replaces, never
+ * appends. */
+static void cmd_random(NamedTree *t, int n)
+{
+    if (n < 2) { printf("random: need at least 2 tips\n"); return; }
+    for (int i = 0; i < t->n_ops; i++) free(t->ops[i].spec);
+    t->n_ops = 0;
+    miglist_free(&t->mig);
+    introlist_free(&t->intro);
+
+    char **names = xmalloc((size_t)n * sizeof *names);
+    for (int i = 0; i < n; i++) names[i] = random_leaf_name(i + 1);
+    TreeNode *root = random_topology(names, n);
+    emit_random_joins(t, root);
+    free_random_tree(root);
+    for (int i = 0; i < n; i++) free(names[i]);
+    free(names);
+    printf("random tree: %d tips, %d joins\n", n, n - 1);
+}
+
+/* Re-randomise the topology of `t` keeping its tip names; rejected if the
+ * tree carries migration or introgression (those overlay events are pinned
+ * to the original topology and can't be rebound automatically). */
+static void cmd_rtopology(NamedTree *t)
+{
+    if (t->mig.count) {
+        printf("rtopology: '%s' has %d migration band%s; clear them first "
+               "('migration clear')\n", t->name, t->mig.count,
+               t->mig.count == 1 ? "" : "s");
+        return;
+    }
+    if (t->intro.count) {
+        printf("rtopology: '%s' has %d introgression event%s; clear them "
+               "first ('introgress clear')\n", t->name, t->intro.count,
+               t->intro.count == 1 ? "" : "s");
+        return;
+    }
+
+    JoinList joins; DiagList errs, warns;
+    diag_init(&errs); diag_init(&warns);
+    Resolution *r = tree_build(t, &joins, &errs, &warns);
+    if (!r || !r->root) {
+        printf("rtopology: '%s' isn't a complete tree yet\n", t->name);
+        print_diags(&errs, "error");
+        resolution_free(r); joinlist_free(&joins);
+        diag_free(&errs); diag_free(&warns);
+        return;
+    }
+    TreeNode **tips = NULL; int n_tips = 0, cap = 0;
+    treenode_collect_leaves(r->root, &tips, &n_tips, &cap);
+    if (n_tips < 2) {
+        printf("rtopology: '%s' has %d tip%s; need at least 2\n", t->name,
+               n_tips, n_tips == 1 ? "" : "s");
+        free(tips);
+        resolution_free(r); joinlist_free(&joins);
+        diag_free(&errs); diag_free(&warns);
+        return;
+    }
+    char **names = xmalloc((size_t)n_tips * sizeof *names);
+    for (int i = 0; i < n_tips; i++) names[i] = xstrdup(tips[i]->name);
+    free(tips);
+    resolution_free(r); joinlist_free(&joins);
+    diag_free(&errs); diag_free(&warns);
+
+    /* clear the existing ops; mig/intro were already verified empty above */
+    for (int i = 0; i < t->n_ops; i++) free(t->ops[i].spec);
+    t->n_ops = 0;
+
+    TreeNode *root = random_topology(names, n_tips);
+    emit_random_joins(t, root);
+    free_random_tree(root);
+    for (int i = 0; i < n_tips; i++) free(names[i]);
+    free(names);
+    printf("rtopology: re-randomised '%s' (%d tips, %d joins)\n",
+           t->name, n_tips, n_tips - 1);
 }
 
 /* Expand a leading '~' (or '~/') to $HOME; otherwise copy the path. */
@@ -686,6 +840,11 @@ static void print_help(void)
 "  save NAME          save a copy of the active tree as NAME\n"
 "  use NAME           make NAME the active tree\n"
 "  new NAME           start a new empty tree named NAME and make it active\n"
+"  random N [seed=K] [as NAME]\n"
+"                     replace the active tree with a uniform-random binary\n"
+"                     tree on N tips (default names a..z, aa..zz, ...)\n"
+"  rtopology [TREE]   re-randomise the topology of TREE (or the active tree),\n"
+"                     keeping its tips. Refuses if mig/intro events exist.\n"
 "  drop NAME          delete the named tree\n"
 "  session save|load [FILE]  save/load named trees (auto on a terminal)\n"
 "  help               show this help\n"
@@ -1061,6 +1220,51 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
         show_status(ws_active(ws));
         return;
     }
+    if (IS("random") || IS("rand")) {
+        /* random N [seed=K] [as NAME] -- replace the active tree (or create
+         * a new named one) with a uniform-random binary tree on N tips. */
+        if (!*arg) { printf("usage: random N [seed=K] [as NAME]\n"); return; }
+        char *spec = xstrdup(arg);
+        char *asname = NULL;
+        char *asw = strstr(spec, " as ");
+        if (asw) { *asw = '\0'; asname = trim(asw + 4); }
+        int n = 0; long seed = -1;
+        for (char *tok = strtok(spec, " \t"); tok; tok = strtok(NULL, " \t")) {
+            if (strncmp(tok, "seed=", 5) == 0) seed = strtol(tok + 5, NULL, 10);
+            else if (!n) n = atoi(tok);
+            else { printf("usage: random N [seed=K] [as NAME]\n"); free(spec); return; }
+        }
+        if (n <= 0) { printf("usage: random N [seed=K] [as NAME]\n"); free(spec); return; }
+        if (seed >= 0) srand((unsigned)seed);
+        /* destination, same rule as 'read': new tree if 'as NAME', else
+         * replace the active scratch tree. */
+        NamedTree *t = ws_active(ws);
+        if (asname && *asname) {
+            int idx = ws_find(ws, asname);
+            NamedTree nt; tree_init(&nt, asname);
+            if (idx >= 0) { tree_free(&ws->trees[idx]); ws->trees[idx] = nt; ws->active = idx; }
+            else          ws->active = ws_add(ws, nt);
+            t = ws_active(ws);
+        }
+        cmd_random(t, n);
+        free(spec);
+        show_status(ws_active(ws));
+        return;
+    }
+    if (IS("rtopology") || IS("rtopo")) {
+        /* rtopology [TREE] -- re-randomise topology preserving the tip set.
+         * No tree name: act on the active tree. */
+        NamedTree *t;
+        if (!*arg) t = ws_active(ws);
+        else {
+            int idx = ws_find(ws, arg);
+            if (idx < 0) { printf("no tree named '%s' (try 'trees')\n", arg); return; }
+            t = &ws->trees[idx];
+        }
+        cmd_rtopology(t);
+        show_status(t);
+        return;
+    }
     if (IS("read") || IS("load")) {
         if (!*arg) { printf("usage: read FILE [as NAME]\n"); return; }
         /* split off an optional 'as NAME' suffix */
@@ -1168,7 +1372,7 @@ static const char *const COMMANDS[] = {
     "help", "quit", "exit", "display", "newick", "block", "read", "imap",
     "migration", "introgress", "hybrid", "taxa", "status", "trees", "history",
     "session", "save", "use", "new", "drop", "move", "graft", "prune",
-    "remove", "rotate",
+    "remove", "rotate", "random", "rtopology",
     NULL
 };
 
@@ -1302,6 +1506,8 @@ static int repl_complete(const char *buf, int wstart, int wend, char ***out, voi
 
 int repl_run(const char *seed_joins)
 {
+    srand((unsigned)time(NULL));     /* default seed; 'random N seed=K' overrides */
+
     Workspace ws = {0};
     NamedTree main_tree;
     tree_init(&main_tree, "main");

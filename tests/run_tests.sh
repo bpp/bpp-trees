@@ -381,6 +381,47 @@ printf 'new mm\nP+Q\nR+S\nmigration P->R\nsession save %s/s2\nquit\n' "$TMP" | "
 sl2="$(printf 'session load %s/s2\nuse mm\nmigration\nquit\n' "$TMP" | "$BIN" -i 2>&1)"
 chk_contains ti35 "$sl2" 'M1:  P → R'
 
+# 'random N [seed=K]' generates a random binary tree on N tips. The seed makes
+# the topology reproducible; default tip names go a..z, aa..zz, ...
+srnd="$(printf 'random 5 seed=42\nnwk\nquit\n' | "$BIN" -i 2>&1)"
+chk_contains ti_rnd1 "$srnd" 'random tree: 5 tips, 4 joins'
+chk_contains ti_rnd2 "$srnd" '((a,((b,c),d)),e);'              # seed=42 is stable
+srnd2="$(printf 'random 28 seed=1\ntaxa\nquit\n' | "$BIN" -i 2>&1)"
+chk_contains ti_rnd3 "$srnd2" 'aa'                              # 27th name
+chk_contains ti_rnd4 "$srnd2" 'bb'                              # 28th name
+# 'random N as NAME' creates a new named tree, leaving the active scratch
+# tree untouched.
+srnd3="$(printf 'A+B\nrandom 4 seed=3 as rnd\nuse main\nnwk\nuse rnd\nstatus\nquit\n' | "$BIN" -i 2>&1)"
+chk_contains ti_rnd5 "$srnd3" '(A,B);'                          # main untouched
+chk_contains ti_rnd6 "$srnd3" '[rnd] 4 taxa'                    # new named tree
+# Validation: N < 2 rejected with a sensible message; bad args show usage.
+srnd4="$(printf 'random 1\nrandom xyz\nquit\n' | "$BIN" -i 2>&1)"
+chk_contains ti_rnd7 "$srnd4" 'need at least 2 tips'
+chk_contains ti_rnd8 "$srnd4" 'usage: random N'
+
+# 'rtopology' permutes the topology of the active (or named) tree, keeping
+# its tip set. Refuses if the tree carries migration or introgression events.
+srt="$(printf 'random 6 seed=11\nnwk\nrtopology\nnwk\ntaxa\nquit\n' | "$BIN" -i 2>&1)"
+chk_contains ti_rt1 "$srt" 'random tree: 6 tips'
+chk_contains ti_rt2 "$srt" 'rtopology: re-randomised'
+# Same tip set after rtopology -- 'taxa' lists a..f.
+chk_contains ti_rt3 "$srt" 'a b c d e f'
+# Refusal paths: migration band present.
+srt2="$(printf 'A+B\nC+D\nA_B+C_D\nmigration A->C\nrtopology\nquit\n' | "$BIN" -i 2>&1)"
+chk_contains ti_rt4 "$srt2" 'has 1 migration band'
+# Refusal paths: introgression event present.
+srt3="$(printf 'A+B\nC+D\nA_B+C_D\nintrogress C->A\nrtopology\nquit\n' | "$BIN" -i 2>&1)"
+chk_contains ti_rt5 "$srt3" 'has 1 introgression event'
+# rtopology on an unknown tree name reports it and changes nothing.
+srt4="$(printf 'A+B\nrtopology nope\nnwk\nquit\n' | "$BIN" -i 2>&1)"
+chk_contains ti_rt6 "$srt4" "no tree named 'nope'"
+chk_contains ti_rt7 "$srt4" '(A,B);'
+# rtopology can target a named tree from elsewhere -- the active tree
+# stays put.
+srt5="$(printf 'A+B\nnew f\nrandom 4 seed=4\nuse main\nrtopology f\nuse main\nnwk\nquit\n' | "$BIN" -i 2>&1)"
+chk_contains ti_rt8 "$srt5" "re-randomised 'f'"
+chk_contains ti_rt9 "$srt5" '(A,B);'                            # main untouched
+
 # --- MSC-I introgression -------------------------------------------------
 
 # CLI: model A network emits the canonical eNewick with phi on the donor ref
