@@ -184,7 +184,18 @@ static void try_transform(NamedTree *t, OpKind kind, const char *spec)
         else if (kind == OP_ROTATE) resolution_rotate(r, spec, &te, &warns);
         else if (kind == OP_GRAFT)  resolution_graft(r, spec, &te, &warns);
         else                        resolution_prune(r, spec, &te, &warns);
-        if (te.count == 0) ok = 1;
+        if (te.count == 0) {
+            ok = 1;
+            /* The edit went through; any introgression events whose endpoint
+             * the edit removed are dropped (with a note). Mostly fires on
+             * prune, but a move can also break a clade-label endpoint. */
+            if (t->intro.count) {
+                DiagList drops; diag_init(&drops);
+                if (introlist_drop_orphans(&t->intro, r, &drops))
+                    print_diags(&drops, "note");
+                diag_free(&drops);
+            }
+        }
         else { print_diags(&te, "error"); printf("(not applied)\n"); }
         diag_free(&te);
     }

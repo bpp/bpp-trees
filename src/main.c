@@ -463,14 +463,17 @@ int main(int argc, char **argv)
         if (imp.graph_only && !errs.count && r && r->root) {
             int edited = o.move_spec || o.graft_spec || o.prune_spec || o.rotate_spec;
             if (edited) {
-                /* an edit that removed an endpoint makes graph_construct fail --
-                 * the edit is refused (error), the read is not. */
+                /* an edit that removed an endpoint orphans its event: drop it
+                 * with a warning so the edit goes through (the read is not
+                 * refused; the introgression on the missing branch is gone). */
                 IntroList ev; introlist_init(&ev);
                 introlist_events(&ev, imp.graph);
-                cgraph = graph_construct(r, &ev, 0, &errs);
+                introlist_drop_orphans(&ev, r, &warns);
+                cgraph = ev.count ? graph_construct(r, &ev, 0, &errs) : NULL;
                 introlist_free(&ev);
                 introlist_free(&intro); introlist_init(&intro);
                 if (cgraph) introlist_from_graph(&intro, cgraph, r);
+                else        imp.graph_only = 0;   /* no events left -- plain tree */
             } else {
                 introlist_mark(&intro, r);   /* intro already holds the imported events */
             }

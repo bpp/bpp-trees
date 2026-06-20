@@ -713,8 +713,33 @@ else fail=$((fail+1)); echo "FAIL ti128: pruned stacked net not idempotent"; fi
 exit_is ti129 0 --read "$FIX/bpp/neander-m3.stree" --prune DENISOVA --newick-only
 # the UNEDITED import is still emitted faithfully (preserves the input labels)
 chk_contains ti130 "$("$BIN" --read "$FIX/bpp/neander-m3.stree" --newick-only 2>/dev/null)" 'mod_pre'
-# an edit that removes an event endpoint is refused (read does not fail silently)
-exit_is ti131 1 --read "$FIX/bpp/neander-m3.stree" --prune CEU --newick-only
+# an edit that removes an event endpoint auto-drops the orphaned event(s)
+# with a warning; the edit goes through (so the read is not refused).
+exit_is ti131 0 --read "$FIX/bpp/neander-m3.stree" --prune CEU --newick-only
+chk_contains ti131a "$("$BIN" --read "$FIX/bpp/neander-m3.stree" --prune CEU --newick-only 2>&1)" INTROGRESSION_DROPPED
+# the resulting tree has no event annotations (all three referenced CEU,
+# directly or via the MOD clade it lived in)
+ti131b=$("$BIN" --read "$FIX/bpp/neander-m3.stree" --prune CEU --newick-only 2>/dev/null)
+if [[ "$ti131b" != *'[&phi'* && "$ti131b" != *'tau-parent'* ]]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL ti131b: pruned-orphan tree still carries event annotations"; fi
+
+# Single-event drop: yeast has one event Skud->Sbay; pruning either endpoint
+# drops the event and emits the plain base tree.
+exit_is ti131c 0 --read "$FIX/bpp/yeast-msci.stree" --prune Sbay --newick-only
+ti131d=$("$BIN" --read "$FIX/bpp/yeast-msci.stree" --prune Sbay --newick-only 2>&1)
+chk_contains ti131e "$ti131d" "INTROGRESSION_DROPPED"
+chk_contains ti131f "$ti131d" "Sbay' is no longer in the tree"
+ti131g=$("$BIN" --read "$FIX/bpp/yeast-msci.stree" --prune Sbay --newick-only 2>/dev/null)
+if [[ "$ti131g" != *'[&phi'* ]]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL ti131g: post-prune tree still annotated"; fi
+
+# Partial drop: anopheles has TWO events (h: R->Q, f: A->b). Pruning Q kills
+# event h but event f survives -- the resulting network must still carry f.
+exit_is ti131h 0 --read "$FIX/bpp/anopheles-msci.stree" --prune Q --newick-only
+ti131i=$("$BIN" --read "$FIX/bpp/anopheles-msci.stree" --prune Q --newick-only 2>&1)
+chk_contains ti131j "$ti131i" "event h"
+ti131k=$("$BIN" --read "$FIX/bpp/anopheles-msci.stree" --prune Q --newick-only 2>/dev/null)
+chk_contains ti131l "$ti131k" '[&phi=0.7'
 
 # And bpp-lint accepts the re-emitted forms (semantic equivalence to originals)
 if [[ -x "$LINT" ]]; then

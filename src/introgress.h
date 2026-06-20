@@ -51,6 +51,12 @@ void introlist_copy(IntroList *dst, const IntroList *src);
 /* Index of an event between `a` and `b` regardless of direction, or -1. */
 int  introlist_find_pair(const IntroList *g, const char *a, const char *b);
 
+/* Drop every event whose donor or recipient no longer resolves on `r` (e.g.
+ * after a --prune removed an endpoint), emitting one DIAG_INTROGRESSION_DROPPED
+ * warning per drop. Returns the number dropped. The caller's pointers into
+ * `g->items` are invalidated; surviving events keep their order. */
+int  introlist_drop_orphans(IntroList *g, const Resolution *r, DiagList *warns);
+
 /* Parse one or more events separated by ',' or ';'. Each event is
  *   DONOR->RECIP | DONOR<->RECIP  [phi=P] [phi2=P] [src=branch|node]
  *                                 [dst=branch|node] [label=NAME]

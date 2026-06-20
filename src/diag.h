@@ -50,6 +50,9 @@
 #define DIAG_MIGRATION_NOOP         "MIGRATION_NOOP"
 #define DIAG_LARGE_TREE             "LARGE_TREE"
 #define DIAG_UNUSED_LABEL           "UNUSED_LABEL"
+/* An introgression event whose endpoint was removed (by --prune / move / graft)
+ * is auto-dropped so the edit goes through; we warn rather than error. */
+#define DIAG_INTROGRESSION_DROPPED  "INTROGRESSION_DROPPED"
 
 typedef struct {
     const char *code;   /* stable, static string */

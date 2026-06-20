@@ -56,6 +56,29 @@ int introlist_find_pair(const IntroList *g, const char *a, const char *b)
     return -1;
 }
 
+int introlist_drop_orphans(IntroList *g, const Resolution *r, DiagList *warns)
+{
+    if (!g || !r) return 0;
+    int dropped = 0, w = 0;
+    for (int i = 0; i < g->count; i++) {
+        IntroEvent *e = &g->items[i];
+        int has_d = resolution_find(r, e->donor) != NULL;
+        int has_p = resolution_find(r, e->recip) != NULL;
+        if (has_d && has_p) { if (w != i) g->items[w] = *e; w++; continue; }
+        if (warns) {
+            const char *missing = !has_p ? e->recip : e->donor;
+            const char *role    = !has_p ? "recipient" : "donor";
+            diag_add(warns, DIAG_INTROGRESSION_DROPPED, -1,
+                "introgression event %s (%s \xe2\x87\x9d %s) dropped: %s '%s' is no longer in the tree.",
+                e->label ? e->label : "?", e->donor, e->recip, role, missing);
+        }
+        free(e->donor); free(e->recip); free(e->label); free(e->label2);
+        dropped++;
+    }
+    g->count = w;
+    return dropped;
+}
+
 /* --- parsing ----------------------------------------------------------- */
 
 static char *trim(char *s)
