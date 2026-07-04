@@ -437,6 +437,108 @@ Graph *graph_construct(const Resolution *r, const IntroList *events,
             ok = 0; break;
         }
 
+        if (e->bidir) {
+            /* Model D: sister-branch bidirectional. Both hybrids sit as
+             * immediate children of the shared parent of donor and recipient,
+             * and are each other's secondary (donor) parents. If a prior event
+             * has already stacked a hybrid above D or R, splice the Model D
+             * hybrid above that stack -- the "anchor" is the topmost node on
+             * D's (resp. R's) side whose primary parent is the shared MRCA. */
+            if (e->phi2 <= 0.0 || e->phi2 >= 1.0) {
+                diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
+                    "introgression: phi2=%g is out of range (0 < phi2 < 1).", e->phi2);
+                ok = 0; break;
+            }
+            int check = (k >= trust_prefix);
+            if (check && (!e->label || !e->label2)) {
+                diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
+                    "introgression: bidirectional event needs two hybrid labels.");
+                ok = 0; break;
+            }
+            if (check && ((e->label && strchr(e->label, '_')) ||
+                          (e->label2 && strchr(e->label2, '_')))) {
+                diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
+                    "introgression: bidirectional labels must not contain '_'.");
+                ok = 0; break;
+            }
+            if (check && e->label && e->label2 &&
+                strcmp(e->label, e->label2) == 0) {
+                diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
+                    "introgression: bidirectional labels must differ ('%s').",
+                    e->label);
+                ok = 0; break;
+            }
+            if (check && ((e->label  && name_used(names, ne, r, e->label))  ||
+                          (e->label2 && name_used(names, ne, r, e->label2)))) {
+                diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
+                    "introgression: bidirectional label is already a tip, clade, or event.");
+                ok = 0; break;
+            }
+            char *nD = e->label  ? xstrdup(e->label)  : NULL;
+            char *nR = e->label2 ? xstrdup(e->label2) : NULL;
+            if (!nD) {
+                char buf[32];
+                do { snprintf(buf, sizeof buf, "H%d", ++autonum); }
+                while (name_used(names, ne, r, buf));
+                nD = xstrdup(buf);
+            }
+            if (!nR) {
+                char buf[32];
+                do { snprintf(buf, sizeof buf, "H%d", ++autonum); }
+                while (name_used(names, ne, r, buf));
+                nR = xstrdup(buf);
+            }
+
+            /* Find the shared parent of R and D by intersecting their primary
+             * chains; the anchor on each side is the child of that parent. */
+            GraphNode *Ranc = NULL, *Danc = NULL, *P = NULL;
+            for (GraphNode *a = R->primary_parent; a && !P; a = a->primary_parent)
+                for (GraphNode *b = D; b && b->primary_parent; b = b->primary_parent)
+                    if (b->primary_parent == a) { P = a; Danc = b; break; }
+            if (P)
+                for (GraphNode *c = R; c && c->primary_parent; c = c->primary_parent)
+                    if (c->primary_parent == P) { Ranc = c; break; }
+            if (!P || !Ranc || !Danc || Ranc == Danc) {
+                diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
+                    "introgression: bidirectional '%s'<->'%s' requires sister "
+                    "branches (they must share an immediate parent).",
+                    e->donor, e->recip);
+                free(nD); free(nR); ok = 0; break;
+            }
+
+            /* Recipient-side hybrid HR spliced above Ranc; donor-side HD above
+             * Danc. Model D carries phi but no tau-parent; both tau flags are
+             * left at zero (native default, emitter suppresses annotation). */
+            GraphNode *HR = graph_new_node(g, nR);
+            HR->is_hybrid = 1;
+            HR->phi = e->phi;
+            HR->primary_parent = P;
+            graph_add_child(HR, Ranc);
+            Ranc->primary_parent = HR;
+            splice_child(P, Ranc, HR);
+
+            GraphNode *HD = graph_new_node(g, nD);
+            HD->is_hybrid = 1;
+            HD->phi = e->phi2;
+            HD->primary_parent = P;
+            graph_add_child(HD, Danc);
+            Danc->primary_parent = HD;
+            splice_child(P, Danc, HD);
+
+            /* Cross-link: each hybrid is the other's bare/secondary child. */
+            graph_add_child(HR, HD);
+            HD->secondary_parent = HR;
+            graph_add_child(HD, HR);
+            HR->secondary_parent = HD;
+
+            names = xrealloc(names, (size_t)(ne + 2) * sizeof *names);
+            enode = xrealloc(enode, (size_t)(ne + 2) * sizeof *enode);
+            names[ne] = nD; enode[ne] = HD; ne++;
+            names[ne] = nR; enode[ne] = HR; ne++;
+            g->n_hybrids += 2;
+            continue;
+        }
+
         char *name = NULL;
         if (e->label) {
             /* Trust the first `trust_prefix` events: they were validated at
