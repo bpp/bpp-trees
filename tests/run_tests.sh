@@ -459,6 +459,40 @@ slbl2="$(printf 'A+B\nC+D\nA_B+C_D\nintrogress C->A\nlabels off\ndisplay ascii\n
 chk_contains ti_lbl5 "$slbl2" 'C H1'
 chk_contains ti_lbl6 "$slbl2" 'A '$(printf '\xe2\x87\x9d')'H1'
 
+# --- stacking order in the legend ----------------------------------------
+# Two networks that agree on donor/recip/phi/model per event but disagree on
+# eNewick nesting -- i.e. on the age order of stacked events on one lineage
+# -- must be distinguishable in the display. This was silently collapsed
+# before: a Model B stacked ABOVE a Model D on the GBR lineage vs BELOW it
+# both looked identical in the legend, hiding the temporal constraint.
+so_old="$("$BIN" --read "$FIX/bpp/fig2c-b-over-d.nwk" --display 2>&1)"
+so_new="$("$BIN" --read "$FIX/bpp/fig2c-d-over-b.nwk" --display 2>&1)"
+chk_contains ti_stack1 "$so_old" 'stacking order (older'
+chk_contains ti_stack2 "$so_old" 'H1/H2 '$(printf '\xe2\x86\x92')' nh'     # bidir older
+chk_contains ti_stack3 "$so_new" 'nh '$(printf '\xe2\x86\x92')' H1/H2'     # unidir older
+# Plain, unstacked networks emit no stacking block.
+so_yeast="$("$BIN" --read "$FIX/bpp/yeast-msci.stree" --display 2>&1)"
+[[ "$so_yeast" != *"stacking order"* ]] && pass=$((pass+1)) || \
+    { fail=$((fail+1)); echo "FAIL ti_stack4: unstacked yeast net shows stacking block"; }
+# REPL: 'introgress A->C; introgress B->C' stacks B's pulse under A's on C.
+# A was added first so is older in the graph.
+so_repl="$(printf 'A+B=AB\nC+D=CD\nAB+CD=R\nintrogress A->C\nintrogress B->C\nintro\nquit\n' | "$BIN" -i 2>&1)"
+chk_contains ti_stack5 "$so_repl" 'stacking order (older'
+chk_contains ti_stack6 "$so_repl" 'H1 '$(printf '\xe2\x86\x92')' H2'
+
+# --- view-command target selector ---------------------------------------
+# display / newick / block / intro all accept a target tree without switching
+# the active tree. 'display TREE' (bare) works for display; '@NAME' works
+# uniformly. Before, 'display t1' silently rendered the active tree.
+sv="$(printf 'A+B\nnew t2\nC+D\nuse main\ndisplay t2\nnewick t2\nnewick main\ndisplay @t2\nblock @t2\nintro @t2\nquit\n' | "$BIN" -i 2>&1)"
+chk_contains ti_view1 "$sv" '(A,B);'                       # newick main
+chk_contains ti_view2 "$sv" '(C,D);'                       # newick t2
+chk_contains ti_view3 "$sv" 'species&tree = 2  C  D'       # block @t2 (t2 has C, D)
+chk_contains ti_view4 "$sv" '(no introgression events)'    # intro @t2
+# Unknown tree name is reported and the command is a no-op.
+sv2="$(printf 'A+B\ndisplay @nope\nnewick @nope\nquit\n' | "$BIN" -i 2>&1)"
+chk_contains ti_view5 "$sv2" "no tree named 'nope'"
+
 # --- MSC-I introgression -------------------------------------------------
 
 # CLI: model A network emits the canonical eNewick with phi on the donor ref

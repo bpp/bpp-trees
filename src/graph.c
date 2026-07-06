@@ -376,6 +376,10 @@ GraphEvent *graph_events(const Graph *g, int *n_out)
     *n_out = n;
     if (!n) return NULL;
     GraphEvent *ev = xcalloc((size_t)n, sizeof *ev);
+    /* Track the graph node(s) each emitted event was built from, so a second
+     * pass can compute stack_above by walking primary_parent chains. */
+    const GraphNode **evh1 = xcalloc((size_t)n, sizeof *evh1);
+    const GraphNode **evh2 = xcalloc((size_t)n, sizeof *evh2);
     int k = 0;
     for (int i = 0; i < g->n_nodes && k < n; i++) {
         const GraphNode *H = g->nodes[i];
@@ -422,6 +426,7 @@ GraphEvent *graph_events(const Graph *g, int *n_out)
             ev[k].phi2   = H->phi;
             ev[k].bidir  = 1;
             ev[k].model  = 'D';
+            evh1[k] = H; evh2[k] = G;
             k++;
             continue;
         }
@@ -434,9 +439,41 @@ GraphEvent *graph_events(const Graph *g, int *n_out)
         ev[k].model = yes == 2 ? 'A' : yes == 1 ? 'B' : 'C';
         ev[k].tau_src = H->tau_secondary;   /* donor-edge own-tau */
         ev[k].tau_dst = H->tau_primary;     /* recipient-edge own-tau */
+        evh1[k] = H;
         k++;
     }
     *n_out = k;                              /* a model-D pair yields one event */
+
+    /* Stacking analysis: for each event walk its hybrid node(s)' primary_parent
+     * chain upward; the closest ancestor that is another event's hybrid node
+     * is the "older stacked" event. eNewick nesting = age order, so this maps
+     * directly to the temporal constraint BPP enforces (a hybrid's τ is
+     * bounded above by its mother node). Bidir events check both their donor-
+     * and recipient-side nodes; the NEAREST hit wins. */
+    for (int e = 0; e < k; e++) ev[e].stack_above = -1;
+    for (int e = 0; e < k; e++) {
+        const GraphNode *starts[2] = { evh1[e], evh2[e] };
+        int best = -1, best_depth = 0;
+        for (int s = 0; s < 2; s++) {
+            if (!starts[s]) continue;
+            int depth = 1;
+            for (const GraphNode *p = starts[s]->primary_parent; p; p = p->primary_parent, depth++) {
+                if (!p->is_hybrid) continue;
+                int hit = -1;
+                for (int f = 0; f < k && hit < 0; f++) {
+                    if (f == e) continue;
+                    if (evh1[f] == p || evh2[f] == p) hit = f;
+                }
+                if (hit >= 0) {
+                    if (best < 0 || depth < best_depth) { best = hit; best_depth = depth; }
+                    break;
+                }
+            }
+        }
+        ev[e].stack_above = best;
+    }
+
+    free(evh1); free(evh2);
     return ev;
 }
 

@@ -37,6 +37,12 @@ typedef struct {
     TauEnd dst;         /* placement at the recipient end -> tau-parent of subtree */
     char  *label;       /* hybrid node label (donor side for bidir)  */
     char  *label2;      /* second hybrid label, bidirectional only   */
+    /* Index (in the enclosing IntroList) of the immediately older event
+     * stacked above this one on the graph's primary-parent chain, or -1.
+     * Populated by introlist_events / introlist_from_graph from the graph;
+     * -1 in the flat-list (non-stacked) path. eNewick nesting encodes age,
+     * so this tells the user which event bounds this one from above. */
+    int    stack_above;
 } IntroEvent;
 
 typedef struct {

@@ -28,6 +28,7 @@ static IntroEvent *introlist_grow(IntroList *g)
     IntroEvent *e = &g->items[g->count++];
     memset(e, 0, sizeof(*e));
     e->phi = 0.5; e->phi2 = -1.0; e->src = TAU_BRANCH; e->dst = TAU_BRANCH;
+    e->stack_above = -1;
     return e;
 }
 
@@ -43,6 +44,7 @@ void introlist_copy(IntroList *dst, const IntroList *src)
         e->src = s->src; e->dst = s->dst;
         e->label  = s->label  ? xstrdup(s->label)  : NULL;
         e->label2 = s->label2 ? xstrdup(s->label2) : NULL;
+        e->stack_above = s->stack_above;
     }
 }
 
@@ -602,6 +604,7 @@ Graph *graph_construct(const Resolution *r, const IntroList *events,
 
 void introlist_events(IntroList *g, const Graph *gr)
 {
+    int base = g->count;                       /* preserve any events already in g */
     int n = 0;
     GraphEvent *ev = graph_events(gr, &n);
     for (int k = 0; k < n; k++) {
@@ -621,6 +624,9 @@ void introlist_events(IntroList *g, const Graph *gr)
             e->src = ev[k].tau_src ? TAU_BRANCH : TAU_NODE;   /* donor-edge own-tau */
             e->dst = ev[k].tau_dst ? TAU_BRANCH : TAU_NODE;   /* recipient-edge own-tau */
         }
+        /* stack_above is an index into the appended run (0..n-1); shift by
+         * `base` so it points at the corresponding IntroList slot. */
+        e->stack_above = ev[k].stack_above >= 0 ? base + ev[k].stack_above : -1;
     }
     graph_events_free(ev, n);
 }
@@ -765,6 +771,15 @@ char *introgress_newick(const IntroList *g, Resolution *r)
     return s;
 }
 
+/* Print "e->label" (or "l1/l2" for bidir), colourised. */
+static void legend_ev_name(const IntroEvent *e, int idx, FILE *fp, int color)
+{
+    if (color) fputs(treenode_mig_color(idx + 1), fp);
+    fputs(e->label, fp);
+    if (e->bidir && e->label2) { fputc('/', fp); fputs(e->label2, fp); }
+    if (color) fputs(TREENODE_MIG_RESET, fp);
+}
+
 void introgress_legend(const IntroList *g, Resolution *r, FILE *fp, int color)
 {
     if (g->count == 0) return;
@@ -776,10 +791,7 @@ void introgress_legend(const IntroList *g, Resolution *r, FILE *fp, int color)
         const char *dn = D ? treenode_bpp_name(D) : e->donor;
         const char *rn = R ? treenode_bpp_name(R) : e->recip;
         fputs("  ", fp);
-        if (color) fputs(treenode_mig_color(k + 1), fp);
-        fputs(e->label, fp);
-        if (e->bidir && e->label2) { fputc('/', fp); fputs(e->label2, fp); }
-        if (color) fputs(TREENODE_MIG_RESET, fp);
+        legend_ev_name(e, k, fp, color);
         if (e->bidir)
             fprintf(fp, ":  %s \xe2\x87\x84 %s   phi=%g / %g  [model D]\n",
                     dn, rn, e->phi, e->phi2);
@@ -787,4 +799,46 @@ void introgress_legend(const IntroList *g, Resolution *r, FILE *fp, int color)
             fprintf(fp, ":  %s \xe2\x87\x9d %s   phi=%g  [model %c]\n",
                     dn, rn, e->phi, model_letter(e));
     }
+
+    /* Stacking analysis: any event with stack_above >= 0 is stacked younger
+     * than that event (nested inside it in eNewick == below it in the graph).
+     * Group into chains (each event has at most one parent in the stacking
+     * forest) and print each chain oldest-to-youngest so the user can see
+     * which events bound which in age. */
+    int any = 0;
+    for (int k = 0; k < g->count; k++) if (g->items[k].stack_above >= 0) { any = 1; break; }
+    if (!any) return;
+
+    fputs("stacking order (older \xe2\x86\x92 younger):\n", fp);   /* → */
+    int *is_root = xmalloc((size_t)g->count * sizeof *is_root);
+    for (int k = 0; k < g->count; k++) is_root[k] = 1;
+    for (int k = 0; k < g->count; k++)
+        if (g->items[k].stack_above >= 0) is_root[g->items[k].stack_above] = 0;
+
+    /* Emit each maximal chain. A root here is any event that is another event's
+     * stack_above (i.e. has descendants stacked below it) and itself has no
+     * stack_above. Events with no children AND no parent aren't part of any
+     * chain -- skipped. */
+    for (int k = 0; k < g->count; k++) {
+        if (g->items[k].stack_above >= 0) continue;   /* not a chain root */
+        int has_child = 0;
+        for (int j = 0; j < g->count; j++)
+            if (g->items[j].stack_above == k) { has_child = 1; break; }
+        if (!has_child) continue;
+        fputs("  ", fp);
+        int cur = k;
+        int first = 1;
+        while (cur >= 0) {
+            if (!first) fputs(" \xe2\x86\x92 ", fp);   /* → */
+            legend_ev_name(&g->items[cur], cur, fp, color);
+            first = 0;
+            /* pick the (unique) event whose stack_above points at cur */
+            int nxt = -1;
+            for (int j = 0; j < g->count; j++)
+                if (g->items[j].stack_above == cur) { nxt = j; break; }
+            cur = nxt;
+        }
+        fputc('\n', fp);
+    }
+    free(is_root);
 }

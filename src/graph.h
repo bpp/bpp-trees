@@ -90,6 +90,14 @@ typedef struct {
     int    bidir;   /* 1 = bidirectional (model D) */
     double phi2;    /* recipient's reverse contribution */
     char  *label2;  /* the partner hybrid's label (owned) */
+    /* Index (in the returned array) of the immediately older event on the same
+     * primary-parent lineage in the graph -- i.e. a hybrid whose node this
+     * event's hybrid descends through. -1 = no older event stacked above.
+     * BPP interprets nesting as age order (younger nodes are bounded by the
+     * age of their eNewick parent), so this is the ordering the user needs
+     * to see to know whether Model D's τ constraints admit an older Model B
+     * stacked above or vice versa. */
+    int    stack_above;
 } GraphEvent;
 
 /* One GraphEvent per hybrid (count = g->n_hybrids), in node order. Names are

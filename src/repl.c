@@ -139,6 +139,48 @@ static int ws_add(Workspace *ws, NamedTree t)
 
 static NamedTree *ws_active(Workspace *ws) { return &ws->trees[ws->active]; }
 
+/* --- view-target picker for read-only commands -------------------------- */
+
+/* Peel an optional "@NAME" token from `arg`, returning the named tree and a
+ * copy of `arg` with the token spliced out. `@NAME` may appear anywhere on
+ * the line (start, end, or between other tokens). Unknown NAME triggers an
+ * error message and returns NULL (leaving `*arg_out` set to the stripped
+ * arg). Absent `@NAME` returns the active tree and `*arg_out = xstrdup(arg)`.
+ * Caller frees `*arg_out`. */
+static NamedTree *peel_at_target(Workspace *ws, const char *arg, char **arg_out)
+{
+    const char *at = NULL;
+    if (arg[0] == '@') at = arg;
+    else {
+        const char *p = arg;
+        while ((p = strchr(p, '@')) != NULL) {
+            if (p == arg || p[-1] == ' ' || p[-1] == '\t') { at = p; break; }
+            p++;
+        }
+    }
+    if (!at) { *arg_out = xstrdup(arg); return ws_active(ws); }
+
+    const char *n = at + 1;
+    const char *e = n;
+    while (*e && *e != ' ' && *e != '\t') e++;
+    char *name = xstrndup(n, (size_t)(e - n));
+
+    size_t pre_len = (size_t)(at - arg);
+    while (pre_len > 0 && (arg[pre_len-1] == ' ' || arg[pre_len-1] == '\t')) pre_len--;
+    const char *post = e;
+    while (*post == ' ' || *post == '\t') post++;
+    if (pre_len == 0 && !*post) *arg_out = xstrdup("");
+    else if (pre_len == 0)      *arg_out = xstrdup(post);
+    else if (!*post)            *arg_out = xstrndup(arg, pre_len);
+    else                        *arg_out = xasprintf("%.*s %s", (int)pre_len, arg, post);
+
+    int idx = ws_find(ws, name);
+    NamedTree *t = idx >= 0 ? &ws->trees[idx] : NULL;
+    if (idx < 0) printf("no tree named '%s' (try 'trees')\n", name);
+    free(name);
+    return t;
+}
+
 /* --- introgression rendering -------------------------------------------- */
 
 /* Apply the active tree's introgression events for display / output.
@@ -819,20 +861,23 @@ static void print_help(void)
 "  prune LIST         remove tips/subtrees (also 'remove')\n"
 "  rotate LIST        reverse the children of the named clade(s)\n"
 "  undo               undo the last change to the active tree\n"
-"  display [ascii]    show the active tree as a branching diagram\n"
+"  display [ascii] [TREE|@TREE]\n"
+"                     show the active tree (or another named tree) as a\n"
+"                     branching diagram\n"
 "  labels [on|off]    toggle internal-node labels in 'display' (no arg flips)\n"
-"  newick             print the active tree's Newick string\n"
-"  block [FILE]       print the species&tree block (to stdout, or write to FILE)\n"
-"  block replace FILE replace the species&tree block in a BPP control file\n"
+"  newick [TREE|@TREE]  print a tree's Newick string (default: active)\n"
+"  block [FILE] [@TREE]  print/write the species&tree block\n"
+"  block replace FILE [@TREE]\n"
+"                     replace the species&tree block in a BPP control file\n"
 "  read FILE [as NAME]  read a Newick / block / control file as a tree (NAME\n"
 "                     creates or replaces a named tree; else replaces active)\n"
 "  imap [FILE]        attach an Imap file (no arg: show; 'clear': detach)\n"
 "  migration SRC->DST add an MSC-M migration band (no arg: list; 'clear';\n"
 "                     'rm N': remove band N)\n"
 "  introgress DONOR->RECIP [phi=P] [src=branch|node] [dst=branch|node]\n"
-"                     add an MSC-I introgression event (no arg: list;\n"
-"                     'clear'; 'rm N': remove event N). Mutually exclusive\n"
-"                     with 'migration' on a given tree.\n"
+"                     add an MSC-I introgression event (no arg: list active;\n"
+"                     '@TREE': list a named tree's events; 'clear'; 'rm N').\n"
+"                     Mutually exclusive with 'migration' on a given tree.\n"
 "  hybrid H : A, C [phi=P] [src=...] [dst=...]\n"
 "                     add a new hybrid species H with primary parent A and\n"
 "                     secondary parent C; sugar for 'graft H->A' + introgression.\n"
@@ -919,8 +964,26 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
         return;
     }
     if (IS("status") || IS("st"))            { show_status(ws_active(ws)); return; }
-    if (IS("newick") || IS("nwk"))           { cmd_newick(ws_active(ws)); return; }
-    if (IS("block"))                         { cmd_block(ws_active(ws), arg); return; }
+    if (IS("newick") || IS("nwk")) {
+        char *stripped;
+        NamedTree *t = peel_at_target(ws, arg, &stripped);
+        /* newick takes no other args -- if a bare word came in with no @,
+         * treat it as a tree name too (parallel to 'display TREE'). */
+        if (t == ws_active(ws) && *stripped) {
+            int idx = ws_find(ws, stripped);
+            if (idx >= 0) t = &ws->trees[idx];
+        }
+        if (t) cmd_newick(t);
+        free(stripped);
+        return;
+    }
+    if (IS("block")) {
+        char *stripped;
+        NamedTree *t = peel_at_target(ws, arg, &stripped);
+        if (t) cmd_block(t, stripped);
+        free(stripped);
+        return;
+    }
     if (IS("imap")) {
         NamedTree *t = ws_active(ws);
         if (!*arg) {
@@ -999,13 +1062,26 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
     }
     if (IS("introgression") || IS("introgress") || IS("intro")) {
         NamedTree *t = ws_active(ws);
+        /* Read-only listing may target any tree via '@NAME' (bare, no other
+         * args). Anything else -- clear/rm/add -- edits the active tree. */
+        NamedTree *listing = t;
+        if (arg[0] == '@') {
+            int nsp = 0;
+            for (const char *p = arg; *p; p++) if (*p == ' ' || *p == '\t') nsp++;
+            if (nsp == 0) {
+                int idx = ws_find(ws, arg + 1);
+                if (idx < 0) { printf("no tree named '%s' (try 'trees')\n", arg + 1); return; }
+                listing = &ws->trees[idx];
+                arg = "";                    /* fall through to the list branch */
+            }
+        }
         if (!*arg) {                                       /* list */
-            if (t->intro.count == 0) { printf("(no introgression events)\n"); return; }
+            if (listing->intro.count == 0) { printf("(no introgression events)\n"); return; }
             DiagList e, w, ie; JoinList j;
             diag_init(&e); diag_init(&w); diag_init(&ie);
-            Resolution *r = tree_build(t, &j, &e, &w);
+            Resolution *r = tree_build(listing, &j, &e, &w);
             IntroList ic;
-            char *body = intro_render(t, r, &ic, &ie);
+            char *body = intro_render(listing, r, &ic, &ie);
             if (body) introgress_legend(&ic, r, stdout, treenode_use_color(0, stdout));
             else print_diags(&ie, "error");
             free(body); introlist_free(&ic);
@@ -1167,7 +1243,27 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
         return;
     }
     if (IS("display") || IS("show") || IS("d")) {
-        cmd_display(ws_active(ws), strcmp(arg, "ascii") == 0, ws->hide_inner);
+        /* display [ascii] [TREE] -- TREE is either @NAME anywhere on the line
+         * or a single bare word matching a tree in the workspace. */
+        char *stripped;
+        NamedTree *t = peel_at_target(ws, arg, &stripped);
+        if (!t) { free(stripped); return; }
+        int ascii = 0;
+        char *bare_name = NULL;
+        char *dup = xstrdup(stripped);
+        for (char *tok = strtok(dup, " \t"); tok; tok = strtok(NULL, " \t")) {
+            if (!strcmp(tok, "ascii") || !strcmp(tok, "--ascii")) ascii = 1;
+            else if (!bare_name) bare_name = tok;
+            /* silently ignore surplus tokens */
+        }
+        if (bare_name && t == ws_active(ws)) {
+            int idx = ws_find(ws, bare_name);
+            if (idx >= 0) t = &ws->trees[idx];
+            else { printf("no tree named '%s' (try 'trees')\n", bare_name);
+                   free(dup); free(stripped); return; }
+        }
+        cmd_display(t, ascii, ws->hide_inner);
+        free(dup); free(stripped);
         return;
     }
     if (IS("labels")) {
