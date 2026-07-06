@@ -38,6 +38,12 @@ typedef struct {
     char     *imap_path;   /* attached Imap file, or NULL */
     MigList   mig;         /* migration bands (MSC-M) */
     IntroList intro;       /* introgression events (MSC-I); mutually exclusive */
+    /* The graph an imported network was parsed into, retained verbatim so
+     * output round-trips even when the flat 'intro' list can't reproduce
+     * the structure (specifically, Model D stacked under a prior event on
+     * one lineage). Invalidated by any edit (see tree_dirty); NULL for
+     * trees built join-by-join. Owned. */
+    Graph    *imported_graph;
 } NamedTree;
 
 typedef struct {
@@ -58,6 +64,18 @@ static void tree_init(NamedTree *t, const char *name)
     t->imap_path = NULL;
     miglist_init(&t->mig);
     introlist_init(&t->intro);
+    t->imported_graph = NULL;
+}
+
+/* Any edit invalidates the "pristine imported network" property, so drop the
+ * cached graph and force subsequent output to rebuild from the flat ops list.
+ * This is where the round-trip trade-off lives: nested Model D survives a
+ * read+display cycle but is lost the moment the user runs move/prune/etc. */
+static void tree_dirty(NamedTree *t)
+{
+    if (!t->imported_graph) return;
+    graph_free(t->imported_graph);
+    t->imported_graph = NULL;
 }
 
 static void tree_add_op(NamedTree *t, OpKind kind, const char *spec)
@@ -79,6 +97,7 @@ static void tree_free(NamedTree *t)
     free(t->imap_path);
     miglist_free(&t->mig);
     introlist_free(&t->intro);
+    graph_free(t->imported_graph);
 }
 
 static void tree_copy(NamedTree *dst, const NamedTree *src, const char *name)
@@ -189,6 +208,9 @@ static NamedTree *peel_at_target(Workspace *ws, const char *arg, char **arg_out)
  * and introgress_legend), and returns the (extended-)Newick body of the
  * resulting tree -- a plain tree when no events, eNewick otherwise.
  *
+ *   - t->imported_graph is present (freshly-read, unedited network): emit
+ *     directly from that graph. The flat 'intro' list may be lossy for
+ *     nested Model D, so this preserves what the parser saw.
  *   - flat (one pulse per recipient): introlist_apply + introgress_newick.
  *   - stacked (a recipient hosts more than one event, or an endpoint names a
  *     prior event): graph_construct + graph_to_newick; the flat list can't
@@ -200,6 +222,10 @@ static NamedTree *peel_at_target(Workspace *ws, const char *arg, char **arg_out)
 static char *intro_render(const NamedTree *t, Resolution *r, IntroList *marks, DiagList *errs)
 {
     introlist_init(marks);
+    if (t->imported_graph) {
+        introlist_from_graph(marks, t->imported_graph, r);
+        return graph_to_newick(t->imported_graph);
+    }
     if (!t->intro.count) return treenode_to_newick(r->root);
 
     if (introlist_needs_graph(&t->intro)) {
@@ -311,7 +337,7 @@ static void try_transform(NamedTree *t, OpKind kind, const char *spec)
     resolution_free(r); joinlist_free(&joins);
     diag_free(&errs); diag_free(&edit_warns);
 
-    if (ok) { tree_add_op(t, kind, spec); show_status_diff(t, &baseline); }
+    if (ok) { tree_dirty(t); tree_add_op(t, kind, spec); show_status_diff(t, &baseline); }
     diag_free(&baseline);
 }
 
@@ -450,6 +476,7 @@ static void free_random_tree(TreeNode *n)
 static void cmd_random(NamedTree *t, int n)
 {
     if (n < 2) { printf("random: need at least 2 tips\n"); return; }
+    tree_dirty(t);
     for (int i = 0; i < t->n_ops; i++) free(t->ops[i].spec);
     t->n_ops = 0;
     miglist_free(&t->mig);
@@ -510,6 +537,7 @@ static void cmd_rtopology(NamedTree *t)
     diag_free(&errs); diag_free(&warns);
 
     /* clear the existing ops; mig/intro were already verified empty above */
+    tree_dirty(t);
     for (int i = 0; i < t->n_ops; i++) free(t->ops[i].spec);
     t->n_ops = 0;
 
@@ -1016,6 +1044,7 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
             return;
         }
         if (strcmp(arg, "clear") == 0) {
+            tree_dirty(t);
             miglist_free(&t->mig);
             printf("migration bands cleared\n");
             return;
@@ -1023,6 +1052,7 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
         if (strncmp(arg, "rm", 2) == 0 && (arg[2] == ' ' || arg[2] == '\t')) {
             int idx = atoi(arg + 2);
             if (idx < 1 || idx > t->mig.count) { printf("no migration band %d\n", idx); return; }
+            tree_dirty(t);
             miglist_remove(&t->mig, idx - 1);
             printf("removed migration band %d\n", idx);
             return;
@@ -1050,6 +1080,7 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
             } else if (!miglist_apply(&tmp, r, &me)) {
                 print_diags(&me, "error");
             } else {
+                tree_dirty(t);
                 miglist_add(&t->mig, tmp.items[0].src, tmp.items[0].dst);
                 printf("added migration M%d: %s \xe2\x86\x92 %s\n",
                        t->mig.count, tmp.items[0].src, tmp.items[0].dst);
@@ -1090,6 +1121,7 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
             return;
         }
         if (strcmp(arg, "clear") == 0) {
+            tree_dirty(t);
             introlist_free(&t->intro);
             printf("introgression events cleared\n");
             return;
@@ -1097,6 +1129,7 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
         if (strncmp(arg, "rm", 2) == 0 && (arg[2] == ' ' || arg[2] == '\t')) {
             int idx = atoi(arg + 2);
             if (idx < 1 || idx > t->intro.count) { printf("no introgression event %d\n", idx); return; }
+            tree_dirty(t);
             free(t->intro.items[idx - 1].donor);
             free(t->intro.items[idx - 1].recip);
             free(t->intro.items[idx - 1].label);
@@ -1155,6 +1188,7 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
                 if (!valid) {
                     print_diags(&ae, "error");
                 } else {
+                    tree_dirty(t);
                     /* commit a fresh copy of the validated new event into the tree */
                     if (t->intro.count == t->intro.cap) {
                         t->intro.cap = t->intro.cap ? t->intro.cap * 2 : 4;
@@ -1171,16 +1205,23 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
                     commit->label = src->label ? xstrdup(src->label) : NULL;
                     /* Re-render to read back the auto-assigned label. Both
                      * flat and graph paths number events H1, H2, ... in input
-                     * order, so the new event's label is on the last item. */
+                     * order, so the new event's label is on the last item.
+                     * For bidir events graph_events may project donor/recip
+                     * to the other side of the coupled pair, so match either
+                     * orientation. */
                     DiagList junk; diag_init(&junk);
                     IntroList c2;
                     char *b = intro_render(t, r, &c2, &junk);
                     const char *name = "?";
-                    if (b) for (int i = 0; i < c2.count; i++)
-                        if (strcmp(c2.items[i].donor, src->donor) == 0 &&
-                            strcmp(c2.items[i].recip, src->recip) == 0 &&
-                            c2.items[i].label)
+                    if (b) for (int i = 0; i < c2.count; i++) {
+                        int forward  = strcmp(c2.items[i].donor, src->donor) == 0 &&
+                                       strcmp(c2.items[i].recip, src->recip) == 0;
+                        int reversed = src->bidir && c2.items[i].bidir &&
+                                       strcmp(c2.items[i].donor, src->recip) == 0 &&
+                                       strcmp(c2.items[i].recip, src->donor) == 0;
+                        if ((forward || reversed) && c2.items[i].label)
                             name = c2.items[i].label;
+                    }
                     printf("added introgression %s: %s \xe2\x87\x9d %s   phi=%g\n",
                            name, src->donor, src->recip, src->phi);
                     free(b); introlist_free(&c2); diag_free(&junk);
@@ -1302,6 +1343,7 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
     if (IS("undo")) {
         NamedTree *t = ws_active(ws);
         if (t->n_ops == 0) { printf("[%s] nothing to undo\n", t->name); return; }
+        tree_dirty(t);
         free(t->ops[--t->n_ops].spec);
         show_status(t);
         return;
@@ -1407,10 +1449,18 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
             t->n_ops = 0;
             miglist_free(&t->mig);
             introlist_free(&t->intro);
+            graph_free(t->imported_graph);
+            t->imported_graph = NULL;
         }
         for (int i = 0; i < imp.n_joins; i++) tree_add_op(t, OP_JOIN, imp.joins[i]);
         miglist_copy(&t->mig, &imp.mig);
         introlist_copy(&t->intro, &imp.intro);
+        /* Take ownership of the parsed graph so a subsequent 'display' /
+         * 'newick' / 'block' re-emits the exact structure that was read.
+         * The flat 'intro' list may be lossy (nested Model D under a prior
+         * unidir on one lineage collapses); the graph is not. */
+        t->imported_graph = imp.graph;
+        imp.graph = NULL;                  /* transferred; import_free won't touch it */
         printf("read '%s' into '%s': %d joins", path, dst_name, imp.n_joins);
         if (imp.mig.count)   printf(", %d migration band%s",
                                     imp.mig.count, imp.mig.count == 1 ? "" : "s");
@@ -1451,6 +1501,7 @@ static void handle_line(Workspace *ws, History *hist, char *raw, int *quit)
 
     if (terr.count == 0 && real) {
         NamedTree *t = ws_active(ws);
+        tree_dirty(t);
         tree_add_op(t, OP_JOIN, s);
         /* trial-build: reject a join that creates a contradiction (a taxon or
          * clade used twice, etc.); an incomplete/ambiguous result is fine. */

@@ -374,7 +374,13 @@ static void splice_child(GraphNode *parent, GraphNode *old, GraphNode *new)
 
 int introlist_needs_graph(const IntroList *g)
 {
-    for (int i = 0; i < g->count; i++)
+    for (int i = 0; i < g->count; i++) {
+        /* Bidirectional (model D) always goes through graph_construct: its
+         * "insert above the endpoint" placement is what preserves the
+         * user-facing invariant "first-added = older" when it stacks under
+         * a prior event. The flat introgress_newick path anchors bidir at
+         * the shared parent and can't express nested placement. */
+        if (g->items[i].bidir) return 1;
         for (int j = 0; j < i; j++) {
             const char *lab = g->items[j].label;
             if (lab && (strcmp(g->items[i].donor, lab) == 0 ||
@@ -383,6 +389,7 @@ int introlist_needs_graph(const IntroList *g)
             if (strcmp(g->items[i].recip, g->items[j].recip) == 0)
                 return 1;                              /* recipient repeated -> stacking */
         }
+    }
     return 0;
 }
 
@@ -440,23 +447,27 @@ Graph *graph_construct(const Resolution *r, const IntroList *events,
         }
 
         if (e->bidir) {
-            /* Model D: sister-branch bidirectional. Both hybrids sit as
-             * immediate children of the shared parent of donor and recipient,
-             * and are each other's secondary (donor) parents. If a prior event
-             * has already stacked a hybrid above D or R, splice the Model D
-             * hybrid above that stack -- the "anchor" is the topmost node on
-             * D's (resp. R's) side whose primary parent is the shared MRCA. */
-            if (e->phi2 <= 0.0 || e->phi2 >= 1.0) {
-                diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
-                    "introgression: phi2=%g is out of range (0 < phi2 < 1).", e->phi2);
-                ok = 0; break;
-            }
+            /* Model D: two coupled hybrids inserted immediately above each
+             * endpoint (like unidir), then cross-linked as each other's
+             * secondary parent. Placement respects insertion order:
+             * a prior event stacked on a shared endpoint stays above the
+             * bidir. Model D carries phi but no tau-parent annotation
+             * (BPP rejects tau on bidir nodes), so 'src=/dst=' overrides
+             * are rejected on a fresh spec (imported events skip this
+             * check by trust_prefix). */
             int check = (k >= trust_prefix);
-            if (check && (!e->label || !e->label2)) {
-                diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
-                    "introgression: bidirectional event needs two hybrid labels.");
+            if (check && (e->src != TAU_BRANCH || e->dst != TAU_BRANCH)) {
+                Diagnostic *d = diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
+                    "introgression: bidirectional events do not accept 'src'/'dst' "
+                    "placement (BPP model D requires no tau-parent annotations).");
+                diag_set_hint(d, "drop src=/dst= from this <-> event.");
                 ok = 0; break;
             }
+            /* phi2 defaults to 1-phi for a well-defined bidir; users may still
+             * override with 'phi2=' when they want an explicit asymmetric split.
+             * Read from a local so `events` stays const-correct. */
+            double phi2 = e->phi2;
+            if (phi2 <= 0.0 || phi2 >= 1.0) phi2 = 1.0 - e->phi;
             if (check && ((e->label && strchr(e->label, '_')) ||
                           (e->label2 && strchr(e->label2, '_')))) {
                 diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
@@ -481,51 +492,46 @@ Graph *graph_construct(const Resolution *r, const IntroList *events,
             if (!nD) {
                 char buf[32];
                 do { snprintf(buf, sizeof buf, "H%d", ++autonum); }
-                while (name_used(names, ne, r, buf));
+                while (name_used(names, ne, r, buf) ||
+                       (nR && strcmp(buf, nR) == 0));
                 nD = xstrdup(buf);
             }
             if (!nR) {
                 char buf[32];
+                /* also skip nD -- the same-side hybrid we just picked */
                 do { snprintf(buf, sizeof buf, "H%d", ++autonum); }
-                while (name_used(names, ne, r, buf));
+                while (name_used(names, ne, r, buf) ||
+                       (nD && strcmp(buf, nD) == 0));
                 nR = xstrdup(buf);
             }
 
-            /* Find the shared parent of R and D by intersecting their primary
-             * chains; the anchor on each side is the child of that parent. */
-            GraphNode *Ranc = NULL, *Danc = NULL, *P = NULL;
-            for (GraphNode *a = R->primary_parent; a && !P; a = a->primary_parent)
-                for (GraphNode *b = D; b && b->primary_parent; b = b->primary_parent)
-                    if (b->primary_parent == a) { P = a; Danc = b; break; }
-            if (P)
-                for (GraphNode *c = R; c && c->primary_parent; c = c->primary_parent)
-                    if (c->primary_parent == P) { Ranc = c; break; }
-            if (!P || !Ranc || !Danc || Ranc == Danc) {
-                diag_add(errs, DIAG_INTROGRESSION_INVALID, -1,
-                    "introgression: bidirectional '%s'<->'%s' requires sister "
-                    "branches (they must share an immediate parent).",
-                    e->donor, e->recip);
-                free(nD); free(nR); ok = 0; break;
-            }
-
-            /* Recipient-side hybrid HR spliced above Ranc; donor-side HD above
-             * Danc. Model D carries phi but no tau-parent; both tau flags are
-             * left at zero (native default, emitter suppresses annotation). */
+            /* Insert HR immediately above the recipient R and HD immediately
+             * above the donor D -- the same pattern as a unidirectional event
+             * on each endpoint. This preserves "first-added = older" when the
+             * bidir stacks under a prior event on a shared endpoint:
+             *   introgress NEAN->GBR; introgress YRI<->GBR   ->  nh over H2
+             *   introgress YRI<->GBR; introgress NEAN->GBR   ->  H2 over nh
+             * Model D carries phi but no tau-parent; both tau flags are left
+             * at zero (native default, emitter suppresses annotation).
+             * BPP's τ constraint (HR and HD contemporaneous) is expressible
+             * with different tree parents -- see fig 2C in the manuscript. */
+            GraphNode *pR = R->primary_parent;
             GraphNode *HR = graph_new_node(g, nR);
             HR->is_hybrid = 1;
             HR->phi = e->phi;
-            HR->primary_parent = P;
-            graph_add_child(HR, Ranc);
-            Ranc->primary_parent = HR;
-            splice_child(P, Ranc, HR);
+            HR->primary_parent = pR;
+            graph_add_child(HR, R);
+            R->primary_parent = HR;
+            splice_child(pR, R, HR);
 
+            GraphNode *pD = D->primary_parent;
             GraphNode *HD = graph_new_node(g, nD);
             HD->is_hybrid = 1;
-            HD->phi = e->phi2;
-            HD->primary_parent = P;
-            graph_add_child(HD, Danc);
-            Danc->primary_parent = HD;
-            splice_child(P, Danc, HD);
+            HD->phi = phi2;
+            HD->primary_parent = pD;
+            graph_add_child(HD, D);
+            D->primary_parent = HD;
+            splice_child(pD, D, HD);
 
             /* Cross-link: each hybrid is the other's bare/secondary child. */
             graph_add_child(HR, HD);

@@ -493,6 +493,39 @@ chk_contains ti_view4 "$sv" '(no introgression events)'    # intro @t2
 sv2="$(printf 'A+B\ndisplay @nope\nnewick @nope\nquit\n' | "$BIN" -i 2>&1)"
 chk_contains ti_view5 "$sv2" "no tree named 'nope'"
 
+# --- REPL round-trip preserves imported graph structure ------------------
+# 'read FILE' now takes ownership of the parsed graph and re-emits from it
+# verbatim. Previously the REPL round-tripped through the flat 'intro' list
+# and lost Model D nested under a prior unidir (the Fig 2C case). Any edit
+# invalidates the cached graph and falls back to the flat rebuild.
+so_cli_new="$("$BIN" --read "$FIX/bpp/fig2c-d-over-b.nwk" --newick-only)"
+so_cli_old="$("$BIN" --read "$FIX/bpp/fig2c-b-over-d.nwk" --newick-only)"
+so_repl_new="$(printf 'read %s\nnewick\nquit\n' "$FIX/bpp/fig2c-d-over-b.nwk" | "$BIN" -i 2>&1 | grep '^[(]')"
+so_repl_old="$(printf 'read %s\nnewick\nquit\n' "$FIX/bpp/fig2c-b-over-d.nwk" | "$BIN" -i 2>&1 | grep '^[(]')"
+if [[ "$so_cli_new" = "$so_repl_new" ]]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL ti_rt1: REPL !== CLI for fig2c-d-over-b (nested nh > H2)"; fi
+if [[ "$so_cli_old" = "$so_repl_old" ]]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL ti_rt2: REPL !== CLI for fig2c-b-over-d (flat H2 > nh)"; fi
+# Stacking legend differs across the two -- proves preservation, not
+# coincidence of identical output.
+if [[ "$so_repl_new" != "$so_repl_old" ]]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL ti_rt3: two Fig 2C forms produce identical REPL Newick"; fi
+# Switching active tree back and forth doesn't clobber the cached graph.
+so_switch="$(printf 'A+B\nread %s as t2\nuse main\nuse t2\nnewick\nquit\n' "$FIX/bpp/fig2c-d-over-b.nwk" | "$BIN" -i 2>&1)"
+chk_contains ti_rt4 "$so_switch" '(GBR,H1[&phi=0.03])H2)nh[&tau-parent=yes]'
+# An edit invalidates the graph and falls back to the flat rebuild (which
+# can't reproduce nested Model D). No requirement to be equal to the input,
+# just that the emit doesn't crash and prints something.
+so_edit="$(printf 'read %s\nrotate MOD\nnewick\nquit\n' "$FIX/bpp/fig2c-d-over-b.nwk" | "$BIN" -i 2>&1 | grep '^[(]')"
+[[ -n "$so_edit" ]] && pass=$((pass+1)) || \
+    { fail=$((fail+1)); echo "FAIL ti_rt5: no newick after edit"; }
+# Plain trees (no MSC-I) round-trip byte-for-byte too.
+cat > "$TMP/plain.nwk" <<'EOF'
+((A,(B,C)),(D,E));
+EOF
+so_plain="$(printf 'read %s\nnewick\nquit\n' "$TMP/plain.nwk" | "$BIN" -i 2>&1 | grep '^[(]')"
+chk_contains ti_rt6 "$so_plain" '((A,(B,C)),(D,E));'
+
 # --- MSC-I introgression -------------------------------------------------
 
 # CLI: model A network emits the canonical eNewick with phi on the donor ref
@@ -604,9 +637,33 @@ chk_contains ti58 "$nD" 'H2'
 chk_contains ti59 "$nD" '&phi=0.3'
 chk_contains ti60 "$nD" '&phi=0.1'
 
-# Model D requires sister branches (A and C are not sisters under A_B+C)
-err="$("$BIN" --joins 'A+B,A_B+C' --introgression 'A<->C' 2>&1)"
-chk_contains ti61 "$err" 'sister branches'
+# Model D no longer requires sibling endpoints -- insertion respects the
+# "first-added = older" convention, so bidir HR/HD are inserted above their
+# respective endpoints and can end up with different tree parents. Fig 2C
+# in the manuscript relies on this (bidir nested under a prior unidir on
+# one lineage). The A<->C case here should emit a valid eNewick network.
+n61="$("$BIN" --joins 'A+B,A_B+C' --introgression 'A<->C phi=0.3 phi2=0.1' --newick-only 2>/dev/null)"
+exit_is ti61 0 --joins 'A+B,A_B+C' --introgression 'A<->C phi=0.3 phi2=0.1' --newick-only
+chk_contains ti61a "$n61" 'phi=0.3'                                        # both phis emitted
+chk_contains ti61b "$n61" 'phi=0.1'
+# Recipient (C) has its own hybrid wrapper carrying the other side's bare ref;
+# donor (A) has similarly. The two hybrids are cross-linked -- valid eNewick.
+chk_contains ti61c "$n61" 'H1[&phi'
+chk_contains ti61d "$n61" 'H2[&phi'
+
+# The Fig 2C "insertion order = age" property: on a base tree with sister
+# YRI/GBR under MOD, adding a unidir on GBR then a bidir YRI<->GBR must
+# nest the bidir UNDER the unidir on the GBR side (nh older). Reversing
+# the input order puts the bidir over the unidir. Both round-trip byte-
+# for-byte to the two Fig 2C forms.
+n_nh_first="$("$BIN" --joins 'YRI+GBR,YRI_GBR+NEAN' \
+    --introgression 'NEAN->GBR=nh phi=0.05 src=node, YRI<->GBR=H1 phi=0.03 phi2=0.03' \
+    --newick-only 2>/dev/null)"
+chk_contains ti_order1 "$n_nh_first" '(GBR,H1[&phi=0.03])H2)nh[&tau-parent=yes]'
+n_bi_first="$("$BIN" --joins 'YRI+GBR,YRI_GBR+NEAN' \
+    --introgression 'YRI<->GBR=H1 phi=0.03 phi2=0.03, NEAN->GBR=nh phi=0.05 src=node' \
+    --newick-only 2>/dev/null)"
+chk_contains ti_order2 "$n_bi_first" '(GBR)nh[&tau-parent=yes],H1[&phi=0.03])H2'
 
 # src=/dst= are rejected on bidirectional events (BPP forbids tau on model D)
 err="$("$BIN" --joins 'A+B,A_B+C' --introgression 'A<->B src=node' 2>&1)"
