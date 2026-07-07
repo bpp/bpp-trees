@@ -978,6 +978,11 @@ fi
 # could not. Idempotency here is the structural oracle for "robust to every
 # eNewick"; bpp's own reading is checked separately where a bpp binary exists.
 GRT="$ROOT/tests/graph_roundtrip"
+# Build the harness on demand (via the Makefile's own rule; a no-op when current)
+# so it runs even when this script is invoked directly, not just via `make test`.
+# A skipped correctness test reads as "covered" when it isn't, so a build failure
+# is a hard failure here rather than a silent skip.
+make -C "$ROOT" tests/graph_roundtrip >/dev/null 2>&1 || true
 if [[ -x "$GRT" ]]; then
     for f in yeast-msci anopheles-msci ghost-msci neander-m1 neander-m2 neander-m3; do
         if "$GRT" "$FIX/bpp/$f.stree" >/dev/null 2>&1; then pass=$((pass+1))
@@ -995,7 +1000,7 @@ if [[ -x "$GRT" ]]; then
     go="$("$GRT" "$FIX/bpp/ghost-msci.stree" 2>/dev/null)"
     chk_contains gt-ghost "$go" 'H[&phi=0.03,&tau-parent=no]'
 else
-    echo "skip gt: tests/graph_roundtrip not built (run 'make test')"
+    echo "FAIL gt: tests/graph_roundtrip could not be built"; fail=$((fail+1))
 fi
 
 # --- Interactive line editor (PTY; requires python3) ---------------------
