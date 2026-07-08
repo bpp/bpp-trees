@@ -8,11 +8,17 @@
 *.nwk
 *.stree
 
-# but keep checked-in test fixtures
+# but keep checked-in test fixtures and shipped examples
 !tests/fixtures/**
+!examples/**
 
 # interactive session image
 .bpptree
 
 # the original starter bundle
 bpp-tree-claude-code.tar.gz
+
+# local scratch
+.DS_Store
+/chr22_simple_newtau_ctls/
+/chr22_simple_newtau_ctls.tar.gz

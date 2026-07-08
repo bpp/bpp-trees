@@ -8,6 +8,12 @@ OPT      = -O2
 CFLAGS  ?= $(CSTD) $(WARN) $(OPT)
 LDLIBS   = -lm
 
+# EXTRA_CFLAGS / EXTRA_LDFLAGS are appended after the defaults. The release
+# workflow uses them to cross-compile (e.g. make EXTRA_CFLAGS=-arch\ x86_64
+# EXTRA_LDFLAGS=-arch\ x86_64). Override BIN for Windows: make BIN=bpp-tree.exe.
+CFLAGS  += $(EXTRA_CFLAGS)
+LDFLAGS += $(EXTRA_LDFLAGS)
+
 SRC      = $(wildcard src/*.c)
 OBJ      = $(SRC:.c=.o)
 BIN      = bpp-tree
@@ -20,7 +26,7 @@ DEBUG_FLAGS = $(CSTD) $(WARN) -O1 -g -fsanitize=address,undefined \
 all: $(BIN)
 
 $(BIN): $(OBJ)
-	$(CC) $(CFLAGS) -o $@ $(OBJ) $(LDLIBS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJ) $(LDLIBS)
 
 src/%.o: src/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
