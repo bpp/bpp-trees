@@ -28,7 +28,25 @@ more than two operands) with a clear error. It supports both **MSC-M migration
 bands** and **MSC-I introgression** (extended-Newick networks). Polytomy support is planned for
 later phases.
 
-## Build
+## Install
+
+**Homebrew (macOS/Linux):**
+
+```
+brew install bpp/tap/bpp-tree
+```
+
+**Prebuilt binaries:** download the archive for your platform (linux-x86_64,
+macos-arm64, macos-x86_64, windows-x86_64) from the
+[latest release](https://github.com/bpp/bpp-trees/releases) — the binary is
+self-contained (no dependencies):
+
+```
+tar xzf bpp-tree-*-macos-arm64.tar.gz
+./bpp-tree-*/bpp-tree --version
+```
+
+## Build from source
 
 ```sh
 make            # release build -> ./bpp-tree   (warning-free, -O2)

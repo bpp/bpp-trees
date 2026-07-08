@@ -1,0 +1,178 @@
+name: release
+
+# Triggered by pushing a tag matching v*, e.g. `git tag v0.1.0 && git push --tags`.
+# Builds bpp-tree on native GitHub runners for four targets, archives the binary
+# together with README/LICENSE/examples, computes SHA256 checksums, and
+# publishes a GitHub Release. Pre-release tags (containing '-', e.g. v0.1.0-rc1)
+# are auto-marked as pre-releases and skip the Homebrew bump.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x86_64
+            os: ubuntu-latest
+            archive_ext: tar.gz
+            bin: bpp-tree
+            cross_arch: ''
+          - target: macos-arm64
+            os: macos-14
+            archive_ext: tar.gz
+            bin: bpp-tree
+            cross_arch: ''
+          - target: macos-x86_64
+            os: macos-14            # cross-compile on Apple Silicon
+            archive_ext: tar.gz
+            bin: bpp-tree
+            cross_arch: x86_64      # see EXTRA_CFLAGS in Makefile
+          - target: windows-x86_64
+            os: windows-latest
+            archive_ext: zip
+            bin: bpp-tree.exe
+            cross_arch: ''
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSYS2 (Windows only)
+        if: matrix.os == 'windows-latest'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            make
+            mingw-w64-x86_64-gcc
+
+      - name: Build (Unix, native)
+        if: matrix.os != 'windows-latest' && matrix.cross_arch == ''
+        run: make
+
+      - name: Build (macOS cross-compile to ${{ matrix.cross_arch }})
+        if: matrix.cross_arch != '' && matrix.os == 'macos-14'
+        run: make EXTRA_CFLAGS="-arch ${{ matrix.cross_arch }}" EXTRA_LDFLAGS="-arch ${{ matrix.cross_arch }}"
+
+      - name: Build (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: msys2 {0}
+        run: make BIN=bpp-tree.exe
+
+      - name: Verify binary arch (macOS cross-build)
+        if: matrix.cross_arch != '' && matrix.os == 'macos-14'
+        run: |
+          file bpp-tree
+          file bpp-tree | grep -q "${{ matrix.cross_arch }}"
+
+      - name: Stage artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          STAGE="bpp-tree-${VERSION}-${{ matrix.target }}"
+          mkdir -p "$STAGE"
+          cp "${{ matrix.bin }}" "$STAGE/"
+          cp README.md LICENSE "$STAGE/"
+          cp -r examples "$STAGE/"
+          echo "STAGE=$STAGE" >> "$GITHUB_ENV"
+
+      - name: Archive (tar.gz)
+        if: matrix.archive_ext == 'tar.gz'
+        shell: bash
+        run: tar -czf "${STAGE}.tar.gz" "$STAGE"
+
+      - name: Archive (zip)
+        if: matrix.archive_ext == 'zip'
+        shell: bash
+        run: 7z a "${STAGE}.zip" "$STAGE"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: bpp-tree-*.${{ matrix.archive_ext }}
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Compute SHA256 checksums
+        run: |
+          cd dist
+          sha256sum bpp-tree-* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create / update release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/bpp-tree-*
+            dist/SHA256SUMS
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+
+  bump-homebrew:
+    name: Bump Homebrew formula
+    needs: release
+    runs-on: ubuntu-latest
+    # Skip pre-release tags (anything with a '-', e.g. v0.1.0-rc1).
+    if: ${{ !contains(github.ref_name, '-') }}
+    steps:
+      # The formula builds from the source tarball, so its sha256 is the
+      # checksum of the GitHub source archive, not the release binaries.
+      # HOMEBREW_TAP_TOKEN3 is a PAT with Contents:write on bpp/homebrew-tap.
+      # Formula/bpp-tree.rb must already exist in the tap (seeded once from
+      # packaging/bpp-tree.rb in this repo).
+      - name: Bump formula in bpp/homebrew-tap
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN3 }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VER="${TAG#v}"
+          URL="https://github.com/bpp/bpp-trees/archive/refs/tags/${TAG}.tar.gz"
+          curl -fsSL -o src.tar.gz "$URL"
+          SHA="$(sha256sum src.tar.gz | awk '{print $1}')"
+          echo "bumping formula to ${VER} (sha256 ${SHA})"
+          git clone --depth 1 \
+            "https://x-access-token:${TAP_TOKEN}@github.com/bpp/homebrew-tap.git" tap
+          cd tap
+          python3 - "$URL" "$SHA" <<'PY'
+          import re, sys
+          url, sha = sys.argv[1], sys.argv[2]
+          path = "Formula/bpp-tree.rb"
+          s = open(path).read()
+          s = re.sub(r'^(\s*)url ".*"$', lambda m: m.group(1) + f'url "{url}"',
+                     s, count=1, flags=re.M)
+          s = re.sub(r'sha256 "[0-9a-f]{64}"', f'sha256 "{sha}"', s, count=1)
+          open(path, "w").write(s)
+          PY
+          git config user.name  "bpp-release-bot"
+          git config user.email "release-bot@users.noreply.github.com"
+          if git diff --quiet; then
+            echo "Formula already at ${VER}; nothing to do."
+            exit 0
+          fi
+          git commit -am "bpp-tree ${VER}"
+          git push origin HEAD:main

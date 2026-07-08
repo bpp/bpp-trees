@@ -1,0 +1,83 @@
+name: ci
+
+# Build + test on every push to main and every PR. Mirrors release.yml's
+# matrix so platform regressions surface before tag time. bpp-tree has no
+# dependencies beyond libc/libm.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x86_64
+            os: ubuntu-latest
+            cross_arch: ''
+          - target: macos-arm64
+            os: macos-14
+            cross_arch: ''
+          - target: macos-x86_64
+            os: macos-14            # cross-compile on Apple Silicon
+            cross_arch: x86_64      # see EXTRA_CFLAGS in Makefile
+          - target: windows-x86_64
+            os: windows-latest
+            cross_arch: ''
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSYS2 (Windows only)
+        if: matrix.os == 'windows-latest'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            make
+            mingw-w64-x86_64-gcc
+
+      - name: Build (Unix, native)
+        if: matrix.os != 'windows-latest' && matrix.cross_arch == ''
+        run: make
+
+      - name: Build (macOS cross-compile to ${{ matrix.cross_arch }})
+        if: matrix.cross_arch != '' && matrix.os == 'macos-14'
+        run: make EXTRA_CFLAGS="-arch ${{ matrix.cross_arch }}" EXTRA_LDFLAGS="-arch ${{ matrix.cross_arch }}"
+
+      - name: Build (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: msys2 {0}
+        run: make BIN=bpp-tree.exe
+
+      - name: Verify binary arch (macOS cross-build)
+        if: matrix.cross_arch != '' && matrix.os == 'macos-14'
+        run: |
+          file bpp-tree
+          file bpp-tree | grep -q "${{ matrix.cross_arch }}"
+
+      # Full integration suite on native Unix builds.
+      - name: Test (Unix, native)
+        if: matrix.os != 'windows-latest' && matrix.cross_arch == ''
+        run: make test
+
+      # Windows: lighter smoke (avoid bash-script portability assumptions).
+      - name: Smoke test (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          ./bpp-tree.exe --version
+          ./bpp-tree.exe examples/primates.joins | grep -q ";"
+          ./bpp-tree.exe --read examples/chr22_fig2c.nwk | grep -q "phi"
