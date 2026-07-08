@@ -1721,7 +1721,7 @@ int repl_run(const char *seed_joins)
         printf("Save %d named tree(s) to '%s'? [y/N] ", workspace_named(&ws), session_file());
         fflush(stdout);
         char *ans = NULL; size_t ac = 0;
-        if (getline(&ans, &ac, stdin) > 0 && (ans[0] == 'y' || ans[0] == 'Y')) {
+        if (bt_getline(&ans, &ac, stdin) > 0 && (ans[0] == 'y' || ans[0] == 'Y')) {
             if (workspace_save(&ws, session_file()) >= 0) printf("session saved.\n");
             else printf("could not write '%s'.\n", session_file());
         }

@@ -38,7 +38,7 @@ Imap *imap_read(const char *path, DiagList *errs)
     char *line = NULL;
     size_t cap = 0;
     ssize_t len;
-    while ((len = getline(&line, &cap, fp)) != -1) {
+    while ((len = bt_getline(&line, &cap, fp)) != -1) {
         /* tokenise: first field = sample, second field = species */
         char *p = line;
         while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;

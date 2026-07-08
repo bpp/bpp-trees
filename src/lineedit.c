@@ -41,7 +41,7 @@ static char *read_cooked(void)
 {
     char *line = NULL;
     size_t cap = 0;
-    ssize_t n = getline(&line, &cap, stdin);
+    ssize_t n = bt_getline(&line, &cap, stdin);
     if (n < 0) { free(line); return NULL; }
     while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r')) line[--n] = '\0';
     return line;

@@ -11,6 +11,35 @@ static void oom(void)
     exit(2);
 }
 
+long bt_getline(char **lineptr, size_t *n, FILE *fp)
+{
+    if (!lineptr || !n || !fp) return -1;
+    char  *buf = *lineptr;
+    size_t cap = *n;
+    if (!buf || cap == 0) {
+        cap = 128;
+        buf = (char *)realloc(buf, cap);
+        if (!buf) return -1;
+    }
+    size_t len = 0;
+    int c;
+    while ((c = getc(fp)) != EOF) {
+        if (len + 1 >= cap) {                 /* keep room for the NUL */
+            size_t ncap = cap * 2;
+            char *nb = (char *)realloc(buf, ncap);
+            if (!nb) { *lineptr = buf; *n = cap; return -1; }
+            buf = nb; cap = ncap;
+        }
+        buf[len++] = (char)c;
+        if (c == '\n') break;
+    }
+    *lineptr = buf;
+    *n = cap;
+    if (len == 0 && c == EOF) return -1;      /* nothing read */
+    buf[len] = '\0';
+    return (long)len;
+}
+
 void *xmalloc(size_t n)
 {
     void *p = malloc(n ? n : 1);
