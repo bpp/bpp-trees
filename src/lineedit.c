@@ -6,17 +6,21 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <termios.h>
 #include <unistd.h>
+#if !defined(_WIN32)
+#include <termios.h>   /* raw-mode line editing is POSIX-only */
+#endif
 
 #define LE_MAX 4096
 
+#if !defined(_WIN32)
 /* Echo to the terminal, deliberately ignoring the result: these writes are
  * cosmetic redraws, and there is nothing to recover if the tty write fails. */
 static void le_emit(const char *s, size_t n)
 {
     if (write(STDOUT_FILENO, s, n) < 0) return;
 }
+#endif
 
 void hist_push(History *h, const char *line)
 {
@@ -47,6 +51,7 @@ static char *read_cooked(void)
     return line;
 }
 
+#if !defined(_WIN32)
 /* Redraw the single edit line and place the cursor at `pos`. */
 static void refresh(const char *prompt, const char *buf, size_t pos)
 {
@@ -195,9 +200,19 @@ static char *edit_raw(const char *prompt, History *h,
         refresh(prompt, buf, pos);
     }
 }
+#endif /* !_WIN32 */
 
 char *line_edit(const char *prompt, History *h, le_complete_fn complete, void *ctx)
 {
+#if defined(_WIN32)
+    /* No termios on Windows: print the prompt and read a cooked line (the
+     * console provides its own line editing/history). Tab completion and
+     * inline editing are unavailable. */
+    (void)h; (void)complete; (void)ctx;
+    fputs(prompt, stdout);
+    fflush(stdout);
+    return read_cooked();
+#else
     if (!isatty(STDIN_FILENO)) return read_cooked();
 
     struct termios orig, raw;
@@ -213,4 +228,5 @@ char *line_edit(const char *prompt, History *h, le_complete_fn complete, void *c
     char *res = edit_raw(prompt, h, complete, ctx);
     tcsetattr(STDIN_FILENO, TCSANOW, &orig);
     return res;
+#endif
 }
