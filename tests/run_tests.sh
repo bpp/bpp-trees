@@ -88,6 +88,12 @@ has   t10 'species&tree = 4  AFR  EUR  EAS  AMR' --imap "$FIX/samples.imap" \
 has   t38 '2  2  2  2'  --imap "$FIX/samples.imap" \
           <<< $'EAS+AMR=ea\nEUR+ea=eu\nAFR+eu'
 
+# tup1-3: unplaced_taxa reporting for interactive tree-building (imap has 4 pops)
+has   tup1 'UNPLACED_TAXA'  --json --imap "$FIX/samples.imap" --joins 'AFR+EUR=AE'
+has   tup2 '"EAS"'          --json --imap "$FIX/samples.imap" --joins 'AFR+EUR=AE'
+has   tup3 '"unplaced_taxa": []' --json --imap "$FIX/samples.imap" \
+          --joins 'AFR+EUR=AE,EAS+AMR=EA,AE+EA'
+
 # t14: JSON has expected fields
 has   t14 '"status": "ok"'          --json --joins 'A+B=AB,C+D=CD,AB+CD'
 has   t14b '"newick": "((A,B),(C,D));"' --json --joins 'A+B=AB,C+D=CD,AB+CD'

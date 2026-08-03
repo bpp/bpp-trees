@@ -20,7 +20,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#define BPP_TREE_VERSION "0.1.0"   /* phase 1: binary trees */
+#define BPP_TREE_VERSION "0.1.1"   /* phase 1: binary trees; +unplaced_taxa */
 
 typedef struct {
     int   json;
@@ -118,6 +118,7 @@ static void print_diag(FILE *fp, const Diagnostic *d, const char *kind)
 }
 
 static void emit_json(FILE *fp, const Options *o, const Resolution *r,
+                      const Imap *imap,
                       TreeNode **taxa, int n_taxa, int n_joins,
                       const char *newick, const char *block,
                       int counts_filled, const int *counts, const MigList *mig,
@@ -136,6 +137,19 @@ static void emit_json(FILE *fp, const Options *o, const Resolution *r,
         jw_key(&w, "taxa");
         jw_arr_open(&w);
         for (int i = 0; i < r->n_leaves; i++) jw_str(&w, r->leaves[i]->name);
+        jw_arr_close(&w);
+        /* imap species not yet placed in the tree (interactive tree-building). */
+        jw_key(&w, "unplaced_taxa");
+        jw_arr_open(&w);
+        if (imap) {
+            for (int i = 0; i < imap->count; i++) {
+                const char *sp = imap->items[i].species;
+                int placed = 0;
+                for (int j = 0; j < r->n_leaves; j++)
+                    if (strcmp(r->leaves[j]->name, sp) == 0) { placed = 1; break; }
+                if (!placed) jw_str(&w, sp);
+            }
+        }
         jw_arr_close(&w);
         jw_kv_str(&w, "newick", newick);
         jw_kv_str(&w, "species_and_tree_block", block);
@@ -487,6 +501,27 @@ int main(int argc, char **argv)
 
     int rc = errs.count ? 1 : 0;
 
+    /* Report imap species not yet placed in the tree (interactive tree-building:
+     * the caller adds one sister-pairing at a time and we say what's left). */
+    if (imap && r && r->root && !errs.count) {
+        char buf[2048]; size_t off = 0; int n_unplaced = 0;
+        for (int i = 0; i < imap->count; i++) {
+            const char *sp = imap->items[i].species;
+            int placed = 0;
+            for (int j = 0; j < r->n_leaves; j++)
+                if (strcmp(r->leaves[j]->name, sp) == 0) { placed = 1; break; }
+            if (!placed) {
+                n_unplaced++;
+                if (off < sizeof buf)
+                    off += (size_t)snprintf(buf + off, sizeof buf - off, "%s%s",
+                                            n_unplaced > 1 ? ", " : "", sp);
+            }
+        }
+        if (n_unplaced)
+            diag_add(&warns, "UNPLACED_TAXA", -1,
+                     "%d imap species not yet placed in the tree: %s", n_unplaced, buf);
+    }
+
     /* --- output ------------------------------------------------------- */
     if (o.json) {
         TreeNode **taxa = NULL; int n_taxa = 0, tcap = 0;
@@ -496,7 +531,7 @@ int main(int argc, char **argv)
             newick = result_newick(cgraph ? cgraph : (imp.graph_only ? imp.graph : NULL), r, &intro);
             block = species_block(taxa, n_taxa, newick, imap, &filled, &counts);
         }
-        emit_json(stdout, &o, r, taxa, n_taxa, n_joins, newick, block,
+        emit_json(stdout, &o, r, imap, taxa, n_taxa, n_joins, newick, block,
                   filled, counts, &mig, &intro, &errs, &warns);
         free(taxa); free(newick); free(block); free(counts);
     } else {
