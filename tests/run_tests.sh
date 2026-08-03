@@ -1093,6 +1093,16 @@ else
     echo "skip te1/te2: python3 not found (PTY tests)"
 fi
 
+# --json --out must ALSO write PREFIX.nwk/.stree (orthogonal to JSON stdout)
+otmp="$(mktemp -d)"
+"$BIN" --json --joins 'A+B=AB,AB+C' --out "$otmp/t" >/dev/null 2>&1
+if [[ -s "$otmp/t.stree" ]] && grep -q 'species&tree' "$otmp/t.stree"; then
+    pass=$((pass+1))
+else
+    fail=$((fail+1)); echo "FAIL tjo: --json --out did not write PREFIX.stree"
+fi
+rm -rf "$otmp"
+
 echo
 echo "passed: $pass   failed: $fail"
 [[ "$fail" == 0 ]]

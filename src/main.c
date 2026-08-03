@@ -20,7 +20,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#define BPP_TREE_VERSION "0.1.1"   /* phase 1: binary trees; +unplaced_taxa */
+#define BPP_TREE_VERSION "0.1.2"   /* +unplaced_taxa; --out writes in --json mode */
 
 typedef struct {
     int   json;
@@ -533,6 +533,24 @@ int main(int argc, char **argv)
         }
         emit_json(stdout, &o, r, imap, taxa, n_taxa, n_joins, newick, block,
                   filled, counts, &mig, &intro, &errs, &warns);
+        /* --out is orthogonal to --json: write PREFIX.nwk/.stree in JSON mode too
+         * (so a caller can get the block as a file for bpp-lint --species-tree-file). */
+        if (o.out_prefix && !o.validate_only && block) {
+            char *migblk = mig.count ? migration_block(&mig, r) : NULL;
+            char *nwk = xasprintf("%s.nwk", o.out_prefix);
+            char *str = xasprintf("%s.stree", o.out_prefix);
+            FILE *fn = fopen(nwk, "w"), *fs = fopen(str, "w");
+            if (!fn || !fs) {
+                fprintf(stderr, "bpp-tree: cannot write output files with prefix '%s'\n", o.out_prefix);
+                rc = 2;
+            } else {
+                fprintf(fn, "%s\n", newick);
+                fprintf(fs, "%s\n", block);
+                if (migblk) fprintf(fs, "\n%s\n", migblk);
+            }
+            if (fn) fclose(fn); if (fs) fclose(fs);
+            free(nwk); free(str); free(migblk);
+        }
         free(taxa); free(newick); free(block); free(counts);
     } else {
         /* errors → stderr, no output */
